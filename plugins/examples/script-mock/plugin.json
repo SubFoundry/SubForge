@@ -1,0 +1,25 @@
+{
+  "plugin_id": "vendor.example.script-mock",
+  "spec_version": "1.0",
+  "name": "Mock Script Source",
+  "version": "1.0.0",
+  "type": "script",
+  "description": "用于本地 mock 服务联调的脚本订阅示例",
+  "config_schema": "schema.json",
+  "secret_fields": [
+    "password"
+  ],
+  "entrypoints": {
+    "login": "scripts/login.lua",
+    "refresh": "scripts/refresh.lua",
+    "fetch": "scripts/fetch.lua"
+  },
+  "capabilities": [
+    "secret",
+    "log"
+  ],
+  "network_profile": "standard",
+  "anti_bot_level": "low",
+  "default_refresh_interval_sec": 1800,
+  "min_refresh_interval_sec": 120
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "subscription_url",
+    "username",
+    "password"
+  ],
+  "properties": {
+    "subscription_url": {
+      "type": "string",
+      "title": "订阅地址",
+      "description": "fetch 阶段返回给 Core 的上游订阅 URL",
+      "minLength": 1
+    },
+    "username": {
+      "type": "string",
+      "title": "用户名",
+      "minLength": 1
+    },
+    "password": {
+      "type": "string",
+      "title": "密码",
+      "format": "password",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false
+}
