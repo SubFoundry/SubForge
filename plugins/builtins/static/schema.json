@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["url"],
+  "properties": {
+    "url": {
+      "type": "string",
+      "title": "订阅 URL",
+      "description": "上游订阅地址",
+      "minLength": 1,
+      "x-ui": {
+        "placeholder": "https://example.com/subscription",
+        "group": "基础配置",
+        "order": 1
+      }
+    },
+    "user_agent": {
+      "type": "string",
+      "title": "自定义 User-Agent",
+      "description": "可选，覆盖默认请求头",
+      "default": "SubForge/0.1.0",
+      "x-ui": {
+        "placeholder": "Mozilla/5.0 ...",
+        "group": "高级配置",
+        "order": 2
+      }
+    }
+  },
+  "additionalProperties": false
+}

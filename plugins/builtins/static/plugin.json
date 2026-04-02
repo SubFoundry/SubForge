@@ -1,0 +1,17 @@
+{
+  "plugin_id": "subforge.builtin.static",
+  "spec_version": "1.0",
+  "name": "Builtin Static Subscription",
+  "version": "1.0.0",
+  "type": "static",
+  "description": "内置静态订阅拉取插件",
+  "config_schema": "schema.json",
+  "secret_fields": [],
+  "capabilities": ["http", "json", "base64"],
+  "network_profile": "standard",
+  "anti_bot_level": "low",
+  "default_refresh_interval_sec": 1800,
+  "min_refresh_interval_sec": 120,
+  "homepage": "https://subforge.local",
+  "license": "MIT"
+}

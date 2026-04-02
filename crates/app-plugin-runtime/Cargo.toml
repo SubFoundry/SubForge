@@ -7,4 +7,6 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-
+app-common = { path = "../app-common" }
+serde_json.workspace = true
+thiserror.workspace = true
