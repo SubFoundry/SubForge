@@ -141,6 +141,7 @@ version = "0.1.0"
 name = "app-storage"
 version = "0.1.0"
 dependencies = [
+ "app-common",
  "refinery",
  "rusqlite",
  "thiserror 2.0.18",
