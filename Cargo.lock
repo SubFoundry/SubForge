@@ -4059,6 +4059,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "app-common",
+ "app-secrets",
+ "app-storage",
  "axum",
  "base64 0.22.1",
  "clap",
@@ -4066,6 +4068,7 @@ dependencies = [
  "rand 0.9.2",
  "serde",
  "serde_json",
+ "time",
  "tokio",
 ]
 
