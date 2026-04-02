@@ -90,6 +90,51 @@ pub struct AppSetting {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyProtocol {
+    Ss,
+    Vmess,
+    Vless,
+    Trojan,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyTransport {
+    Tcp,
+    Ws,
+    Grpc,
+    H2,
+    Quic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TlsConfig {
+    pub enabled: bool,
+    #[serde(default)]
+    pub server_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProxyNode {
+    pub id: String,
+    pub name: String,
+    pub protocol: ProxyProtocol,
+    pub server: String,
+    pub port: u16,
+    pub transport: ProxyTransport,
+    pub tls: TlsConfig,
+    #[serde(default)]
+    pub extra: BTreeMap<String, Value>,
+    pub source_id: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginType {
@@ -263,6 +308,23 @@ mod tests {
             value: "dark".to_string(),
             updated_at: "2026-04-02T00:00:00Z".to_string(),
         };
+        let node = ProxyNode {
+            id: "node-1".to_string(),
+            name: "HK-01".to_string(),
+            protocol: ProxyProtocol::Vmess,
+            server: "hk.example.com".to_string(),
+            port: 443,
+            transport: ProxyTransport::Ws,
+            tls: TlsConfig {
+                enabled: true,
+                server_name: Some("hk.example.com".to_string()),
+            },
+            extra: BTreeMap::new(),
+            source_id: "source-1".to_string(),
+            tags: vec!["hk".to_string()],
+            region: Some("hk".to_string()),
+            updated_at: "2026-04-02T00:00:00Z".to_string(),
+        };
 
         assert!(
             serde_json::from_str::<Plugin>(
@@ -291,6 +353,12 @@ mod tests {
         assert!(
             serde_json::from_str::<AppSetting>(
                 &serde_json::to_string(&setting).expect("setting 序列化失败")
+            )
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_str::<ProxyNode>(
+                &serde_json::to_string(&node).expect("proxy_node 序列化失败")
             )
             .is_ok()
         );

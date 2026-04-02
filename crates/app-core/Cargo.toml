@@ -11,7 +11,13 @@ app-common = { path = "../app-common" }
 app-plugin-runtime = { path = "../app-plugin-runtime" }
 app-secrets = { path = "../app-secrets" }
 app-storage = { path = "../app-storage" }
+base64.workspace = true
 regex.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true

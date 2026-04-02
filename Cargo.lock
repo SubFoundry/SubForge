@@ -164,10 +164,14 @@ dependencies = [
  "app-plugin-runtime",
  "app-secrets",
  "app-storage",
+ "axum",
+ "base64 0.22.1",
  "regex",
+ "reqwest",
  "serde_json",
  "thiserror 2.0.18",
  "time",
+ "tokio",
 ]
 
 [[package]]
@@ -204,6 +208,7 @@ dependencies = [
  "app-common",
  "refinery",
  "rusqlite",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

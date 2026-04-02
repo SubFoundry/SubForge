@@ -1,22 +1,38 @@
 //! app-core：业务编排层（调度、刷新、重试、状态机）。
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use app_common::{ConfigSchemaProperty, Plugin, SourceInstance};
+use app_common::{
+    ConfigSchemaProperty, Plugin, ProxyNode, ProxyProtocol, ProxyTransport, SourceInstance,
+    TlsConfig,
+};
 use app_plugin_runtime::{LoadedPlugin, PluginLoader, PluginRuntimeError};
 use app_secrets::{SecretError, SecretStore};
 use app_storage::{
-    Database, PluginRepository, SourceConfigRepository, SourceRepository, StorageError,
+    Database, NodeCacheRepository, PluginRepository, SourceConfigRepository, SourceRepository,
+    StorageError,
+};
+use base64::Engine;
+use base64::engine::general_purpose::{
+    STANDARD as BASE64_STANDARD, STANDARD_NO_PAD as BASE64_STANDARD_NO_PAD,
+    URL_SAFE as BASE64_URL_SAFE, URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
 };
 use regex::Regex;
+use reqwest::header::{CONTENT_TYPE, HeaderMap, USER_AGENT};
+use reqwest::{Client as HttpClient, Url};
 use serde_json::Value;
 use thiserror::Error;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 const SECRET_PLACEHOLDER: &str = "••••••";
+const DEFAULT_SUBSCRIPTION_TIMEOUT_SEC: u64 = 30;
+const MAX_SUBSCRIPTION_REDIRECTS: usize = 10;
+const MAX_SUBSCRIPTION_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -30,6 +46,8 @@ pub enum CoreError {
     Io(#[from] std::io::Error),
     #[error("时间格式化失败：{0}")]
     TimeFormat(#[from] time::error::Format),
+    #[error("HTTP 客户端初始化失败：{0}")]
+    HttpClientBuild(#[from] reqwest::Error),
     #[error("插件已安装：{0}")]
     PluginAlreadyInstalled(String),
     #[error("配置校验失败：{0}")]
@@ -38,6 +56,10 @@ pub enum CoreError {
     PluginNotFound(String),
     #[error("来源不存在：{0}")]
     SourceNotFound(String),
+    #[error("订阅拉取失败：{0}")]
+    SubscriptionFetch(String),
+    #[error("订阅解析失败：{0}")]
+    SubscriptionParse(String),
 }
 
 pub type CoreResult<T> = Result<T, CoreError>;
@@ -49,7 +71,13 @@ impl CoreError {
             Self::ConfigInvalid(_) => "E_CONFIG_INVALID",
             Self::PluginNotFound(_) | Self::SourceNotFound(_) => "E_NOT_FOUND",
             Self::PluginAlreadyInstalled(_) => "E_PLUGIN_INVALID",
-            Self::Storage(_) | Self::Secret(_) | Self::Io(_) | Self::TimeFormat(_) => "E_INTERNAL",
+            Self::SubscriptionParse(_) => "E_PARSE",
+            Self::Storage(_)
+            | Self::Secret(_)
+            | Self::Io(_)
+            | Self::TimeFormat(_)
+            | Self::HttpClientBuild(_)
+            | Self::SubscriptionFetch(_) => "E_INTERNAL",
         }
     }
 }
@@ -75,10 +103,153 @@ pub struct PluginInstallService<'a> {
     plugins_dir: PathBuf,
 }
 
+pub trait SubscriptionParser {
+    fn parse(&self, source_id: &str, payload: &str) -> CoreResult<Vec<ProxyNode>>;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UriListParser;
+
+#[derive(Debug)]
+pub struct StaticFetcher<'a, P: SubscriptionParser = UriListParser> {
+    db: &'a Database,
+    parser: P,
+    client: HttpClient,
+}
+
 struct PreparedConfig {
     normalized: BTreeMap<String, Value>,
     non_secret: BTreeMap<String, String>,
     secret: BTreeMap<String, String>,
+}
+
+impl SubscriptionParser for UriListParser {
+    fn parse(&self, source_id: &str, payload: &str) -> CoreResult<Vec<ProxyNode>> {
+        let normalized = normalize_subscription_payload(payload);
+        let updated_at = now_rfc3339()?;
+        let mut nodes = Vec::new();
+
+        for (line_number, raw_line) in normalized.lines().enumerate() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            match parse_proxy_uri_line(line, source_id, &updated_at) {
+                Ok(node) => nodes.push(node),
+                Err(error) => {
+                    eprintln!(
+                        "WARN: 解析订阅行失败（source_id={}, line={}）：{}",
+                        source_id,
+                        line_number + 1,
+                        error
+                    );
+                }
+            }
+        }
+
+        Ok(nodes)
+    }
+}
+
+impl<'a> StaticFetcher<'a, UriListParser> {
+    pub fn new(db: &'a Database) -> CoreResult<Self> {
+        Self::with_parser(db, UriListParser)
+    }
+}
+
+impl<'a, P> StaticFetcher<'a, P>
+where
+    P: SubscriptionParser,
+{
+    pub fn with_parser(db: &'a Database, parser: P) -> CoreResult<Self> {
+        let client = HttpClient::builder()
+            .redirect(reqwest::redirect::Policy::limited(
+                MAX_SUBSCRIPTION_REDIRECTS,
+            ))
+            .timeout(std::time::Duration::from_secs(
+                DEFAULT_SUBSCRIPTION_TIMEOUT_SEC,
+            ))
+            .build()?;
+
+        Ok(Self { db, parser, client })
+    }
+
+    pub async fn fetch_and_cache(
+        &self,
+        source_instance_id: &str,
+        subscription_url: &str,
+        user_agent: Option<&str>,
+    ) -> CoreResult<Vec<ProxyNode>> {
+        let subscription_url = subscription_url.trim();
+        if subscription_url.is_empty() {
+            return Err(CoreError::ConfigInvalid("订阅 URL 不能为空".to_string()));
+        }
+
+        let url = Url::parse(subscription_url)
+            .map_err(|error| CoreError::ConfigInvalid(format!("订阅 URL 非法：{error}")))?;
+        let mut headers = HeaderMap::new();
+        if let Some(user_agent) = user_agent {
+            let user_agent = user_agent.trim();
+            if !user_agent.is_empty() {
+                headers.insert(
+                    USER_AGENT,
+                    user_agent.parse().map_err(|error| {
+                        CoreError::ConfigInvalid(format!("user_agent 非法：{error}"))
+                    })?,
+                );
+            }
+        }
+
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|error| CoreError::SubscriptionFetch(error.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::SubscriptionFetch(format!(
+                "上游响应状态码异常：{}",
+                status.as_u16()
+            )));
+        }
+
+        validate_content_type(response.headers())?;
+        if let Some(content_length) = response.content_length() {
+            if content_length > MAX_SUBSCRIPTION_BYTES as u64 {
+                return Err(CoreError::SubscriptionFetch(format!(
+                    "上游响应体过大：{} bytes（限制 {} bytes）",
+                    content_length, MAX_SUBSCRIPTION_BYTES
+                )));
+            }
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| CoreError::SubscriptionFetch(error.to_string()))?;
+        if bytes.len() > MAX_SUBSCRIPTION_BYTES {
+            return Err(CoreError::SubscriptionFetch(format!(
+                "上游响应体过大：{} bytes（限制 {} bytes）",
+                bytes.len(),
+                MAX_SUBSCRIPTION_BYTES
+            )));
+        }
+
+        let payload = std::str::from_utf8(&bytes).map_err(|error| {
+            CoreError::SubscriptionParse(format!("订阅内容不是 UTF-8：{error}"))
+        })?;
+        let nodes = self.parser.parse(source_instance_id, payload)?;
+
+        let now = now_rfc3339()?;
+        let cache_repository = NodeCacheRepository::new(self.db);
+        cache_repository.upsert_nodes(source_instance_id, &nodes, &now, None)?;
+
+        Ok(nodes)
+    }
 }
 
 impl<'a> SourceService<'a> {
@@ -528,6 +699,409 @@ fn masked_config(
     result
 }
 
+fn validate_content_type(headers: &HeaderMap) -> CoreResult<()> {
+    let Some(content_type) = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Ok(());
+    };
+
+    let normalized = content_type.to_ascii_lowercase();
+    let allowed = normalized.starts_with("text/")
+        || normalized.starts_with("application/json")
+        || normalized.starts_with("application/octet-stream");
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(CoreError::SubscriptionFetch(format!(
+            "上游 Content-Type 不受支持：{content_type}"
+        )))
+    }
+}
+
+fn normalize_subscription_payload(payload: &str) -> String {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if looks_like_uri_list(trimmed) {
+        return trimmed.to_string();
+    }
+
+    let compact_base64 = trimmed
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect::<String>();
+    if let Some(decoded) = try_decode_base64_text(&compact_base64) {
+        let decoded_trimmed = decoded.trim();
+        if looks_like_uri_list(decoded_trimmed) {
+            return decoded_trimmed.to_string();
+        }
+    }
+
+    trimmed.to_string()
+}
+
+fn looks_like_uri_list(payload: &str) -> bool {
+    payload.contains("ss://")
+        || payload.contains("vmess://")
+        || payload.contains("vless://")
+        || payload.contains("trojan://")
+}
+
+fn parse_proxy_uri_line(line: &str, source_id: &str, updated_at: &str) -> CoreResult<ProxyNode> {
+    if line.starts_with("ss://") {
+        return parse_ss_uri(line, source_id, updated_at);
+    }
+    if line.starts_with("vmess://") {
+        return parse_vmess_uri(line, source_id, updated_at);
+    }
+    if line.starts_with("vless://") {
+        return parse_vless_uri(line, source_id, updated_at);
+    }
+    if line.starts_with("trojan://") {
+        return parse_trojan_uri(line, source_id, updated_at);
+    }
+
+    Err(CoreError::SubscriptionParse(format!(
+        "不支持的 URI 协议：{line}"
+    )))
+}
+
+fn parse_ss_uri(line: &str, source_id: &str, updated_at: &str) -> CoreResult<ProxyNode> {
+    let raw = &line["ss://".len()..];
+    let (without_fragment, name) = split_fragment(raw);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+
+    let (credential_part, host_part) = if let Some((cred, host)) = without_query.rsplit_once('@') {
+        (cred.to_string(), host.to_string())
+    } else {
+        let decoded = try_decode_base64_text(without_query)
+            .ok_or_else(|| CoreError::SubscriptionParse("ss URI 缺少 @server:port".to_string()))?;
+        let (cred, host) = decoded
+            .rsplit_once('@')
+            .ok_or_else(|| CoreError::SubscriptionParse("ss URI 凭证无法解析".to_string()))?;
+        (cred.to_string(), host.to_string())
+    };
+
+    let credential_decoded =
+        try_decode_base64_text(&credential_part).unwrap_or_else(|| credential_part.clone());
+    let (cipher, password) = credential_decoded.split_once(':').ok_or_else(|| {
+        CoreError::SubscriptionParse("ss URI 凭证必须为 method:password".to_string())
+    })?;
+    let (server, port) = parse_host_port(&host_part)?;
+
+    let mut extra = BTreeMap::new();
+    extra.insert("cipher".to_string(), Value::String(cipher.to_string()));
+    extra.insert("password".to_string(), Value::String(password.to_string()));
+
+    Ok(build_proxy_node(
+        source_id,
+        name.unwrap_or_else(|| format!("ss-{server}:{port}")),
+        ProxyProtocol::Ss,
+        server,
+        port,
+        ProxyTransport::Tcp,
+        TlsConfig {
+            enabled: false,
+            server_name: None,
+        },
+        extra,
+        updated_at,
+    ))
+}
+
+fn parse_vmess_uri(line: &str, source_id: &str, updated_at: &str) -> CoreResult<ProxyNode> {
+    let raw = line["vmess://".len()..].trim();
+    let decoded = try_decode_base64_text(raw)
+        .ok_or_else(|| CoreError::SubscriptionParse("vmess URI Base64 解码失败".to_string()))?;
+    let payload = serde_json::from_str::<Value>(&decoded)
+        .map_err(|error| CoreError::SubscriptionParse(format!("vmess JSON 非法：{error}")))?;
+
+    let server = payload
+        .get("add")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CoreError::SubscriptionParse("vmess 缺少 add".to_string()))?
+        .to_string();
+    let port = payload
+        .get("port")
+        .and_then(|value| {
+            value
+                .as_u64()
+                .and_then(|raw| u16::try_from(raw).ok())
+                .or_else(|| value.as_str().and_then(|raw| raw.parse::<u16>().ok()))
+        })
+        .ok_or_else(|| CoreError::SubscriptionParse("vmess 缺少有效 port".to_string()))?;
+    let name = payload
+        .get("ps")
+        .and_then(Value::as_str)
+        .unwrap_or("vmess")
+        .to_string();
+    let transport = match payload.get("net").and_then(Value::as_str) {
+        Some("ws") => ProxyTransport::Ws,
+        Some("grpc") => ProxyTransport::Grpc,
+        Some("h2") => ProxyTransport::H2,
+        Some("quic") => ProxyTransport::Quic,
+        _ => ProxyTransport::Tcp,
+    };
+
+    let tls_enabled = matches!(
+        payload.get("tls").and_then(Value::as_str),
+        Some("tls" | "reality")
+    );
+    let server_name = payload
+        .get("sni")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("host").and_then(Value::as_str))
+        .map(ToString::to_string);
+
+    let mut extra = BTreeMap::new();
+    if let Some(uuid) = payload.get("id").and_then(Value::as_str) {
+        extra.insert("uuid".to_string(), Value::String(uuid.to_string()));
+    }
+    if let Some(path) = payload.get("path").and_then(Value::as_str) {
+        extra.insert("path".to_string(), Value::String(path.to_string()));
+    }
+
+    Ok(build_proxy_node(
+        source_id,
+        name,
+        ProxyProtocol::Vmess,
+        server,
+        port,
+        transport,
+        TlsConfig {
+            enabled: tls_enabled,
+            server_name,
+        },
+        extra,
+        updated_at,
+    ))
+}
+
+fn parse_vless_uri(line: &str, source_id: &str, updated_at: &str) -> CoreResult<ProxyNode> {
+    let url = Url::parse(line)
+        .map_err(|error| CoreError::SubscriptionParse(format!("vless URI 非法：{error}")))?;
+    let server = url
+        .host_str()
+        .ok_or_else(|| CoreError::SubscriptionParse("vless URI 缺少 host".to_string()))?
+        .to_string();
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| CoreError::SubscriptionParse("vless URI 缺少端口".to_string()))?;
+    let name = url
+        .fragment()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("vless")
+        .to_string();
+    let transport = map_transport(url.query_pairs().find_map(|(k, v)| {
+        if k == "type" {
+            Some(v.to_string())
+        } else {
+            None
+        }
+    }));
+    let security = url.query_pairs().find_map(|(k, v)| {
+        if k == "security" {
+            Some(v.to_string())
+        } else {
+            None
+        }
+    });
+    let sni = url.query_pairs().find_map(|(k, v)| {
+        if k == "sni" {
+            Some(v.to_string())
+        } else {
+            None
+        }
+    });
+
+    let mut extra = BTreeMap::new();
+    if !url.username().is_empty() {
+        extra.insert(
+            "uuid".to_string(),
+            Value::String(url.username().to_string()),
+        );
+    }
+
+    Ok(build_proxy_node(
+        source_id,
+        name,
+        ProxyProtocol::Vless,
+        server,
+        port,
+        transport,
+        TlsConfig {
+            enabled: matches!(security.as_deref(), Some("tls" | "reality" | "xtls")),
+            server_name: sni,
+        },
+        extra,
+        updated_at,
+    ))
+}
+
+fn parse_trojan_uri(line: &str, source_id: &str, updated_at: &str) -> CoreResult<ProxyNode> {
+    let url = Url::parse(line)
+        .map_err(|error| CoreError::SubscriptionParse(format!("trojan URI 非法：{error}")))?;
+    let server = url
+        .host_str()
+        .ok_or_else(|| CoreError::SubscriptionParse("trojan URI 缺少 host".to_string()))?
+        .to_string();
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| CoreError::SubscriptionParse("trojan URI 缺少端口".to_string()))?;
+    let name = url
+        .fragment()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("trojan")
+        .to_string();
+
+    let mut extra = BTreeMap::new();
+    if !url.username().is_empty() {
+        extra.insert(
+            "password".to_string(),
+            Value::String(url.username().to_string()),
+        );
+    }
+    let sni = url.query_pairs().find_map(|(k, v)| {
+        if k == "sni" {
+            Some(v.to_string())
+        } else {
+            None
+        }
+    });
+
+    Ok(build_proxy_node(
+        source_id,
+        name,
+        ProxyProtocol::Trojan,
+        server,
+        port,
+        ProxyTransport::Tcp,
+        TlsConfig {
+            enabled: true,
+            server_name: sni,
+        },
+        extra,
+        updated_at,
+    ))
+}
+
+fn split_fragment(raw: &str) -> (&str, Option<String>) {
+    if let Some((value, fragment)) = raw.split_once('#') {
+        (value, Some(fragment.to_string()))
+    } else {
+        (raw, None)
+    }
+}
+
+fn parse_host_port(raw: &str) -> CoreResult<(String, u16)> {
+    if let Some(stripped) = raw.strip_prefix('[') {
+        let (host, remainder) = stripped
+            .split_once(']')
+            .ok_or_else(|| CoreError::SubscriptionParse(format!("host 非法：{raw}")))?;
+        let port = remainder
+            .strip_prefix(':')
+            .ok_or_else(|| CoreError::SubscriptionParse(format!("端口缺失：{raw}")))?
+            .parse::<u16>()
+            .map_err(|error| CoreError::SubscriptionParse(format!("端口非法：{error}")))?;
+        return Ok((host.to_string(), port));
+    }
+
+    let (host, port) = raw
+        .rsplit_once(':')
+        .ok_or_else(|| CoreError::SubscriptionParse(format!("host:port 解析失败：{raw}")))?;
+    let port = port
+        .parse::<u16>()
+        .map_err(|error| CoreError::SubscriptionParse(format!("端口非法：{error}")))?;
+    Ok((host.to_string(), port))
+}
+
+fn map_transport(raw: Option<String>) -> ProxyTransport {
+    match raw.as_deref() {
+        Some("ws") => ProxyTransport::Ws,
+        Some("grpc") => ProxyTransport::Grpc,
+        Some("h2") => ProxyTransport::H2,
+        Some("quic") => ProxyTransport::Quic,
+        _ => ProxyTransport::Tcp,
+    }
+}
+
+fn build_proxy_node(
+    source_id: &str,
+    name: String,
+    protocol: ProxyProtocol,
+    server: String,
+    port: u16,
+    transport: ProxyTransport,
+    tls: TlsConfig,
+    extra: BTreeMap<String, Value>,
+    updated_at: &str,
+) -> ProxyNode {
+    ProxyNode {
+        id: build_proxy_node_id(
+            source_id,
+            &protocol,
+            &server,
+            port,
+            &name,
+            extra.get("uuid").or_else(|| extra.get("password")),
+        ),
+        name,
+        protocol,
+        server,
+        port,
+        transport,
+        tls,
+        extra,
+        source_id: source_id.to_string(),
+        tags: Vec::new(),
+        region: None,
+        updated_at: updated_at.to_string(),
+    }
+}
+
+fn build_proxy_node_id(
+    source_id: &str,
+    protocol: &ProxyProtocol,
+    server: &str,
+    port: u16,
+    name: &str,
+    credential: Option<&Value>,
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    source_id.hash(&mut hasher);
+    protocol.hash(&mut hasher);
+    server.hash(&mut hasher);
+    port.hash(&mut hasher);
+    name.hash(&mut hasher);
+    if let Some(value) = credential {
+        value.to_string().hash(&mut hasher);
+    }
+    format!("node-{:016x}", hasher.finish())
+}
+
+fn try_decode_base64_text(raw: &str) -> Option<String> {
+    for engine in [
+        &BASE64_STANDARD,
+        &BASE64_STANDARD_NO_PAD,
+        &BASE64_URL_SAFE,
+        &BASE64_URL_SAFE_NO_PAD,
+    ] {
+        if let Ok(bytes) = engine.decode(raw) {
+            if let Ok(text) = String::from_utf8(bytes) {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
 fn validate_property_value(
     field_name: &str,
     property: &ConfigSchemaProperty,
@@ -729,15 +1303,30 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> CoreResult<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::collections::HashSet;
     use std::fs;
+    use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use app_common::ProxyProtocol;
     use app_secrets::{MemorySecretStore, SecretStore};
-    use app_storage::{Database, PluginRepository, SourceConfigRepository, SourceRepository};
+    use app_storage::{
+        Database, NodeCacheRepository, PluginRepository, SourceConfigRepository, SourceRepository,
+    };
+    use axum::Router;
+    use axum::routing::get;
     use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
 
-    use super::{CoreError, PluginInstallService, SourceService};
+    use super::{
+        CoreError, PluginInstallService, SourceService, StaticFetcher, SubscriptionParser,
+        UriListParser,
+    };
+
+    const BASE64_SUBSCRIPTION_FIXTURE: &str =
+        include_str!("../tests/fixtures/subscription_base64.txt");
 
     #[test]
     fn install_plugin_copies_files_and_inserts_database_record() {
@@ -958,6 +1547,91 @@ mod tests {
         cleanup_dir(&temp_root);
     }
 
+    #[test]
+    fn uri_list_parser_supports_base64_and_skips_invalid_lines() {
+        let parser = UriListParser;
+        let nodes = parser
+            .parse("source-fixture", BASE64_SUBSCRIPTION_FIXTURE)
+            .expect("解析 fixture 应成功");
+
+        assert_eq!(nodes.len(), 3);
+        let protocols = nodes
+            .iter()
+            .map(|node| node.protocol.clone())
+            .collect::<HashSet<_>>();
+        assert!(protocols.contains(&ProxyProtocol::Ss));
+        assert!(protocols.contains(&ProxyProtocol::Vmess));
+        assert!(protocols.contains(&ProxyProtocol::Trojan));
+    }
+
+    #[test]
+    fn uri_list_parser_handles_invalid_protocol_lines_without_failing() {
+        let parser = UriListParser;
+        let payload = "not-uri\nvmess://invalid\nss://invalid\nvless://missing-port";
+        let nodes = parser
+            .parse("source-invalid", payload)
+            .expect("解析过程应不中断");
+
+        assert!(nodes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn static_fetcher_fetches_parses_and_persists_node_cache() {
+        let db = Database::open_in_memory().expect("内存数据库初始化失败");
+        let source_repository = SourceRepository::new(&db);
+        source_repository
+            .insert(&sample_source("source-fetch-1", "subforge.builtin.static"))
+            .expect("写入来源实例失败");
+
+        let (url, server_task) = start_fixture_server(
+            "/sub",
+            BASE64_SUBSCRIPTION_FIXTURE.trim().to_string(),
+            "text/plain; charset=utf-8",
+        )
+        .await;
+
+        let fetcher = StaticFetcher::new(&db).expect("初始化 StaticFetcher 失败");
+        let nodes = fetcher
+            .fetch_and_cache(
+                "source-fetch-1",
+                &format!("{url}/sub"),
+                Some("SubForge-Test/0.1"),
+            )
+            .await
+            .expect("拉取并缓存应成功");
+        assert_eq!(nodes.len(), 3);
+
+        let cache_repository = NodeCacheRepository::new(&db);
+        let cache = cache_repository
+            .get_by_source("source-fetch-1")
+            .expect("读取缓存失败")
+            .expect("缓存应存在");
+        assert_eq!(cache.nodes.len(), 3);
+
+        server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn static_fetcher_rejects_unsupported_content_type() {
+        let db = Database::open_in_memory().expect("内存数据库初始化失败");
+        let source_repository = SourceRepository::new(&db);
+        source_repository
+            .insert(&sample_source("source-fetch-2", "subforge.builtin.static"))
+            .expect("写入来源实例失败");
+
+        let (url, server_task) =
+            start_fixture_server("/sub", "plain text".to_string(), "image/png").await;
+
+        let fetcher = StaticFetcher::new(&db).expect("初始化 StaticFetcher 失败");
+        let error = fetcher
+            .fetch_and_cache("source-fetch-2", &format!("{url}/sub"), None)
+            .await
+            .expect_err("非法 Content-Type 应被拒绝");
+        assert!(matches!(error, CoreError::SubscriptionFetch(_)));
+
+        server_task.abort();
+    }
+
     fn builtins_static_plugin_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/builtins/static")
     }
@@ -1039,6 +1713,46 @@ mod tests {
         )
         .expect("写入 schema.json 失败");
         path
+    }
+
+    fn sample_source(id: &str, plugin_id: &str) -> app_common::SourceInstance {
+        app_common::SourceInstance {
+            id: id.to_string(),
+            plugin_id: plugin_id.to_string(),
+            name: format!("Source {id}"),
+            status: "healthy".to_string(),
+            state_json: None,
+            created_at: "2026-04-02T01:10:00Z".to_string(),
+            updated_at: "2026-04-02T01:10:00Z".to_string(),
+        }
+    }
+
+    async fn start_fixture_server(
+        route_path: &'static str,
+        body: String,
+        content_type: &'static str,
+    ) -> (String, JoinHandle<()>) {
+        let app = Router::new().route(
+            route_path,
+            get(move || {
+                let body = body.clone();
+                async move { ([(axum::http::header::CONTENT_TYPE, content_type)], body) }
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("启动测试 HTTP 服务失败");
+        let address: SocketAddr = listener.local_addr().expect("读取监听地址失败");
+        let base_url = format!("http://{}", address);
+
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("测试 HTTP 服务运行失败");
+        });
+
+        (base_url, task)
     }
 
     fn cleanup_dir(path: &Path) {

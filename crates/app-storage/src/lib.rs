@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use app_common::{AppSetting, Plugin, Profile, SourceInstance};
+use app_common::{AppSetting, Plugin, Profile, ProxyNode, SourceInstance};
 use refinery::Error as MigrationError;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use thiserror::Error;
@@ -22,6 +22,8 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("SQLite 操作失败：{0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("JSON 序列化失败：{0}")]
+    Json(#[from] serde_json::Error),
     #[error("迁移执行失败：{0}")]
     Migration(#[from] MigrationError),
     #[error("数据库完整性校验失败：{0}")]
@@ -379,6 +381,103 @@ impl<'a> SourceConfigRepository<'a> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeCacheEntry {
+    pub id: String,
+    pub source_instance_id: String,
+    pub nodes: Vec<ProxyNode>,
+    pub fetched_at: String,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NodeCacheRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> NodeCacheRepository<'a> {
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    pub fn upsert_nodes(
+        &self,
+        source_instance_id: &str,
+        nodes: &[ProxyNode],
+        fetched_at: &str,
+        expires_at: Option<&str>,
+    ) -> StorageResult<()> {
+        let cache_id = format!("node_cache:{source_instance_id}");
+        let data_json = serde_json::to_string(nodes)?;
+
+        self.db.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO node_cache (id, source_instance_id, data_json, fetched_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id)
+                 DO UPDATE SET data_json = excluded.data_json,
+                               fetched_at = excluded.fetched_at,
+                               expires_at = excluded.expires_at",
+                params![
+                    cache_id,
+                    source_instance_id,
+                    data_json,
+                    fetched_at,
+                    expires_at
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn get_by_source(&self, source_instance_id: &str) -> StorageResult<Option<NodeCacheEntry>> {
+        self.db.with_connection(|connection| {
+            let raw = connection
+                .query_row(
+                    "SELECT id, source_instance_id, data_json, fetched_at, expires_at
+                     FROM node_cache
+                     WHERE source_instance_id = ?1
+                     LIMIT 1",
+                    [source_instance_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>("id")?,
+                            row.get::<_, String>("source_instance_id")?,
+                            row.get::<_, String>("data_json")?,
+                            row.get::<_, String>("fetched_at")?,
+                            row.get::<_, Option<String>>("expires_at")?,
+                        ))
+                    },
+                )
+                .optional()?;
+
+            if let Some((id, source_instance_id, data_json, fetched_at, expires_at)) = raw {
+                let nodes = serde_json::from_str::<Vec<ProxyNode>>(&data_json)?;
+                Ok(Some(NodeCacheEntry {
+                    id,
+                    source_instance_id,
+                    nodes,
+                    fetched_at,
+                    expires_at,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    pub fn delete_by_source(&self, source_instance_id: &str) -> StorageResult<usize> {
+        self.db.with_connection(|connection| {
+            let affected = connection.execute(
+                "DELETE FROM node_cache
+                 WHERE source_instance_id = ?1",
+                [source_instance_id],
+            )?;
+            Ok(affected)
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileRepository<'a> {
     db: &'a Database,
@@ -596,9 +695,13 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use app_common::{AppSetting, Plugin, Profile, ProfileSource, SourceInstance};
+    use app_common::{
+        AppSetting, Plugin, Profile, ProfileSource, ProxyNode, ProxyProtocol, ProxyTransport,
+        SourceInstance, TlsConfig,
+    };
 
     use super::Database;
+    use super::NodeCacheRepository;
     use super::PluginRepository;
     use super::ProfileRepository;
     use super::SettingsRepository;
@@ -921,6 +1024,47 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn node_cache_repository_upsert_and_delete_workflow() -> StorageResult<()> {
+        let db = Database::open_in_memory()?;
+        let source_repository = SourceRepository::new(&db);
+        let cache_repository = NodeCacheRepository::new(&db);
+        let source = sample_source("source-cache-1", "vendor.example.static");
+        source_repository.insert(&source)?;
+
+        let first_nodes = vec![sample_proxy_node("node-a", "hk.example.com", 443)];
+        cache_repository.upsert_nodes(
+            &source.id,
+            &first_nodes,
+            "2026-04-02T04:00:00Z",
+            Some("2026-04-02T05:00:00Z"),
+        )?;
+
+        let loaded = cache_repository
+            .get_by_source(&source.id)?
+            .expect("缓存应存在");
+        assert_eq!(loaded.source_instance_id, source.id);
+        assert_eq!(loaded.nodes, first_nodes);
+        assert_eq!(loaded.fetched_at, "2026-04-02T04:00:00Z");
+        assert_eq!(loaded.expires_at.as_deref(), Some("2026-04-02T05:00:00Z"));
+
+        let second_nodes = vec![
+            sample_proxy_node("node-b", "sg.example.com", 8443),
+            sample_proxy_node("node-c", "us.example.com", 443),
+        ];
+        cache_repository.upsert_nodes(&source.id, &second_nodes, "2026-04-02T06:00:00Z", None)?;
+        let updated = cache_repository
+            .get_by_source(&source.id)?
+            .expect("更新后缓存应存在");
+        assert_eq!(updated.nodes, second_nodes);
+        assert_eq!(updated.expires_at, None);
+
+        assert_eq!(cache_repository.delete_by_source(&source.id)?, 1);
+        assert!(cache_repository.get_by_source(&source.id)?.is_none());
+
+        Ok(())
+    }
+
     fn list_tables(db: &Database) -> StorageResult<Vec<String>> {
         db.with_connection(|connection| {
             let mut statement = connection.prepare(
@@ -997,6 +1141,26 @@ mod tests {
             state_json: None,
             created_at: "2026-04-02T01:10:00Z".to_string(),
             updated_at: "2026-04-02T01:10:00Z".to_string(),
+        }
+    }
+
+    fn sample_proxy_node(id: &str, server: &str, port: u16) -> ProxyNode {
+        ProxyNode {
+            id: id.to_string(),
+            name: format!("{server}:{port}"),
+            protocol: ProxyProtocol::Ss,
+            server: server.to_string(),
+            port,
+            transport: ProxyTransport::Tcp,
+            tls: TlsConfig {
+                enabled: true,
+                server_name: Some(server.to_string()),
+            },
+            extra: BTreeMap::new(),
+            source_id: "source-cache-1".to_string(),
+            tags: Vec::new(),
+            region: None,
+            updated_at: "2026-04-02T04:00:00Z".to_string(),
         }
     }
 
