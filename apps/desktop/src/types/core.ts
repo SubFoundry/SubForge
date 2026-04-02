@@ -10,3 +10,27 @@ export type CoreApiResponse = {
   headers: Record<string, string>;
   body: string;
 };
+
+export type CoreConnectionPhase =
+  | "idle"
+  | "booting"
+  | "running"
+  | "disconnected"
+  | "error";
+
+export type CoreEventPayload = {
+  event: string;
+  message: string;
+  sourceId?: string;
+  timestamp?: string;
+};
+
+export type CoreBridgeEvent = {
+  kind: "connected" | "event" | "disconnected" | "error";
+  payload?: CoreEventPayload;
+  message?: string;
+};
+
+export type SettingsResponse = {
+  settings: Record<string, string>;
+};

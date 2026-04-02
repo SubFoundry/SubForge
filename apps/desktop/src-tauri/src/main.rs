@@ -11,7 +11,8 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
+use tokio::task::JoinHandle;
 
 const DEFAULT_CORE_HOST: &str = "127.0.0.1";
 const DEFAULT_CORE_PORT: u16 = 18118;
@@ -49,6 +50,23 @@ struct CoreBootstrapLine {
     admin_token: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreEventPayload {
+    event: String,
+    message: String,
+    source_id: Option<String>,
+    timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreBridgeEvent {
+    kind: String,
+    payload: Option<CoreEventPayload>,
+    message: Option<String>,
+}
+
 #[derive(Debug)]
 struct CoreState {
     child: Option<Child>,
@@ -56,6 +74,7 @@ struct CoreState {
     base_url: String,
     version: Option<String>,
     pid: Option<u32>,
+    events_task: Option<JoinHandle<()>>,
 }
 
 impl Default for CoreState {
@@ -66,6 +85,7 @@ impl Default for CoreState {
             base_url: default_base_url(),
             version: None,
             pid: None,
+            events_task: None,
         }
     }
 }
@@ -156,6 +176,7 @@ impl CoreManager {
         let mut maybe_child = {
             let mut state = self.lock_state()?;
             self.reap_child_if_exited(&mut state)?;
+            abort_events_task(&mut state);
             state.child.take()
         };
 
@@ -171,6 +192,182 @@ impl CoreManager {
         }
 
         self.compose_status_payload().await
+    }
+
+    fn start_events_bridge(&self, app_handle: AppHandle) -> Result<()> {
+        let (base_url, admin_token, core_running) = {
+            let mut state = self.lock_state()?;
+            self.reap_child_if_exited(&mut state)?;
+            let can_start_new_bridge = if let Some(task) = state.events_task.as_ref() {
+                task.is_finished()
+            } else {
+                true
+            };
+            if !can_start_new_bridge {
+                return Ok(());
+            }
+            abort_events_task(&mut state);
+            (
+                state.base_url.clone(),
+                state.admin_token.clone(),
+                state.child.is_some(),
+            )
+        };
+
+        if !core_running {
+            return Ok(());
+        }
+
+        if admin_token.is_none() {
+            emit_bridge_event(
+                &app_handle,
+                CoreBridgeEvent {
+                    kind: "disconnected".to_string(),
+                    payload: None,
+                    message: Some("Core 事件流未启动（缺少 token 或 Core 未运行）".to_string()),
+                },
+            );
+            return Ok(());
+        }
+
+        let token = admin_token.expect("admin_token 已判空");
+        let url = format!("{base_url}/api/events");
+        let client = self.client.clone();
+        let task = tokio::spawn(async move {
+            emit_bridge_event(
+                &app_handle,
+                CoreBridgeEvent {
+                    kind: "connected".to_string(),
+                    payload: None,
+                    message: Some("Core 事件流已连接".to_string()),
+                },
+            );
+
+            let response = match client.get(&url).bearer_auth(token).send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    emit_bridge_event(
+                        &app_handle,
+                        CoreBridgeEvent {
+                            kind: "error".to_string(),
+                            payload: None,
+                            message: Some(format!("Core 事件流连接失败：{error}")),
+                        },
+                    );
+                    emit_bridge_event(
+                        &app_handle,
+                        CoreBridgeEvent {
+                            kind: "disconnected".to_string(),
+                            payload: None,
+                            message: Some("Core 事件流已断开".to_string()),
+                        },
+                    );
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                emit_bridge_event(
+                    &app_handle,
+                    CoreBridgeEvent {
+                        kind: "error".to_string(),
+                        payload: None,
+                        message: Some(format!(
+                            "Core 事件流连接失败，HTTP 状态码：{}",
+                            response.status()
+                        )),
+                    },
+                );
+                emit_bridge_event(
+                    &app_handle,
+                    CoreBridgeEvent {
+                        kind: "disconnected".to_string(),
+                        payload: None,
+                        message: Some("Core 事件流已断开".to_string()),
+                    },
+                );
+                return;
+            }
+
+            let mut event_name = String::new();
+            let mut data_lines: Vec<String> = Vec::new();
+            let mut buffer = String::new();
+            let mut response = response;
+
+            loop {
+                let chunk = match response.chunk().await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(error) => {
+                        emit_bridge_event(
+                            &app_handle,
+                            CoreBridgeEvent {
+                                kind: "error".to_string(),
+                                payload: None,
+                                message: Some(format!("Core 事件流读取失败：{error}")),
+                            },
+                        );
+                        break;
+                    }
+                };
+
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(idx) = buffer.find('\n') {
+                    let mut line = buffer[..idx].to_string();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                    buffer = buffer[idx + 1..].to_string();
+
+                    if line.is_empty() {
+                        if !data_lines.is_empty() {
+                            let data = data_lines.join("\n");
+                            if !data.eq_ignore_ascii_case("keepalive") {
+                                let emitted_event = parse_core_event_payload(&event_name, &data);
+                                emit_bridge_event(
+                                    &app_handle,
+                                    CoreBridgeEvent {
+                                        kind: "event".to_string(),
+                                        payload: Some(emitted_event),
+                                        message: None,
+                                    },
+                                );
+                            }
+                            event_name.clear();
+                            data_lines.clear();
+                        }
+                        continue;
+                    }
+
+                    if line.starts_with(':') {
+                        continue;
+                    }
+
+                    if let Some(raw) = line.strip_prefix("event:") {
+                        event_name = raw.trim().to_string();
+                        continue;
+                    }
+
+                    if let Some(raw) = line.strip_prefix("data:") {
+                        data_lines.push(raw.trim_start().to_string());
+                    }
+                }
+            }
+
+            emit_bridge_event(
+                &app_handle,
+                CoreBridgeEvent {
+                    kind: "disconnected".to_string(),
+                    payload: None,
+                    message: Some("Core 事件流已断开".to_string()),
+                },
+            );
+        });
+
+        let mut state = self.lock_state()?;
+        state.events_task = Some(task);
+        Ok(())
     }
 
     async fn compose_status_payload(&self) -> Result<CoreStatusPayload> {
@@ -297,6 +494,7 @@ impl CoreManager {
                 state.child = None;
                 state.admin_token = None;
                 state.pid = None;
+                abort_events_task(state);
             }
         }
         Ok(())
@@ -329,6 +527,16 @@ async fn core_api_call(
     manager
         .proxy_api_call(request)
         .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn core_events_start(
+    manager: State<'_, CoreManager>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    manager
+        .start_events_bridge(app_handle)
         .map_err(|err| err.to_string())
 }
 
@@ -387,6 +595,61 @@ where
     });
 }
 
+fn parse_core_event_payload(event_name: &str, data: &str) -> CoreEventPayload {
+    let fallback_event = if event_name.trim().is_empty() {
+        "message".to_string()
+    } else {
+        event_name.trim().to_string()
+    };
+
+    let parsed: Result<Value, _> = serde_json::from_str(data);
+    match parsed {
+        Ok(value) => {
+            let event = value
+                .get("event")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or(fallback_event);
+            let message = value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| data.to_string());
+            let source_id = value
+                .get("source_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let timestamp = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+
+            CoreEventPayload {
+                event,
+                message,
+                source_id,
+                timestamp,
+            }
+        }
+        Err(_) => CoreEventPayload {
+            event: fallback_event,
+            message: data.to_string(),
+            source_id: None,
+            timestamp: None,
+        },
+    }
+}
+
+fn emit_bridge_event(app_handle: &AppHandle, event: CoreBridgeEvent) {
+    let _ = app_handle.emit("core://event", event);
+}
+
+fn abort_events_task(state: &mut CoreState) {
+    if let Some(task) = state.events_task.take() {
+        task.abort();
+    }
+}
+
 fn normalize_path(path: &str) -> String {
     if path.starts_with('/') {
         path.to_string()
@@ -437,7 +700,8 @@ fn main() {
             core_start,
             core_stop,
             core_status,
-            core_api_call
+            core_api_call,
+            core_events_start
         ])
         .run(tauri::generate_context!())
         .expect("运行 SubForge Desktop 失败");

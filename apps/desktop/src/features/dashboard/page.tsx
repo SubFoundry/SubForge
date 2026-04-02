@@ -1,79 +1,84 @@
-import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { coreStart, coreStatus, fetchCoreHealth } from "../../lib/api";
-import type { CoreStatus } from "../../types/core";
+import { Skeleton } from "../../components/skeleton";
 import { useCoreUiStore } from "../../stores/core-ui-store";
 
+function StatusCard({
+  title,
+  value,
+  hint,
+}: {
+  title: string;
+  value: string;
+  hint: string;
+}) {
+  return (
+    <article className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel-muted)]/50 p-4">
+      <p className="text-xs uppercase tracking-wide text-[var(--muted-text)]">{title}</p>
+      <p className="mt-2 text-xl font-semibold text-[var(--app-text)]">{value}</p>
+      <p className="mt-1 text-xs text-[var(--muted-text)]">{hint}</p>
+    </article>
+  );
+}
+
 export default function DashboardPage() {
-  const [status, setStatus] = useState<CoreStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const setLoading = useCoreUiStore((state) => state.setLoading);
+  const phase = useCoreUiStore((state) => state.phase);
+  const status = useCoreUiStore((state) => state.status);
+  const heartbeatAt = useCoreUiStore((state) => state.heartbeatAt);
+  const lastEvent = useCoreUiStore((state) => state.lastEvent);
+  const eventStreamActive = useCoreUiStore((state) => state.eventStreamActive);
+  const error = useCoreUiStore((state) => state.error);
 
-  useEffect(() => {
-    let active = true;
-
-    async function bootstrap() {
-      setLoading(true);
-      try {
-        const current = await coreStatus();
-        if (!active) {
-          return;
-        }
-
-        if (!current.running) {
-          const started = await coreStart();
-          if (active) {
-            setStatus(started);
-          }
-        } else {
-          setStatus(current);
-        }
-      } catch (err) {
-        if (active) {
-          setError(err instanceof Error ? err.message : "Core 启动失败");
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void bootstrap();
-
-    return () => {
-      active = false;
-    };
-  }, [setLoading]);
-
-  const healthQuery = useQuery({
-    queryKey: ["core-health", status?.running],
-    queryFn: fetchCoreHealth,
-    enabled: Boolean(status?.running),
-    staleTime: 5_000,
-  });
+  const isBooting = phase === "booting" || (phase === "idle" && !status);
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-5">
       <header>
         <h2 className="text-2xl font-semibold">Dashboard</h2>
-        <p className="mt-1 text-sm text-slate-300">P1 联通验证面板</p>
+        <p className="mt-1 text-sm text-[var(--muted-text)]">
+          Core 连接状态、心跳与事件流概览
+        </p>
       </header>
 
-      <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
-        <p className="text-sm text-slate-300">Core 状态</p>
-        <p className="mt-2 text-lg font-medium">
-          {error
-            ? `异常：${error}`
-            : status?.running
-              ? "运行中"
-              : "未运行"}
-        </p>
-        <p className="mt-1 text-xs text-slate-400">Base URL: {status?.baseUrl ?? "-"}</p>
-        <p className="mt-1 text-xs text-slate-400">
-          版本: {healthQuery.data?.version ?? status?.version ?? "-"}
-        </p>
-      </div>
+      {isBooting ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-3">
+          <StatusCard
+            title="Core 状态"
+            value={status?.running ? "运行中" : "未运行"}
+            hint={status?.baseUrl ?? "-"}
+          />
+          <StatusCard
+            title="事件流"
+            value={eventStreamActive ? "已连接" : "未连接"}
+            hint={lastEvent?.event ?? "暂无事件"}
+          />
+          <StatusCard
+            title="心跳"
+            value={heartbeatAt ?? "未建立"}
+            hint={error ?? "最近一次轮询成功"}
+          />
+        </div>
+      )}
+
+      <article className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel-muted)]/45 p-4">
+        <h3 className="text-sm font-semibold text-[var(--app-text)]">最近事件</h3>
+        {lastEvent ? (
+          <div className="mt-3 space-y-1 text-sm">
+            <p className="font-medium text-[var(--accent-strong)]">{lastEvent.event}</p>
+            <p className="text-[var(--app-text)]">{lastEvent.message}</p>
+            <p className="text-xs text-[var(--muted-text)]">
+              source: {lastEvent.sourceId ?? "-"} | timestamp:{" "}
+              {lastEvent.timestamp ?? "-"}
+            </p>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-[var(--muted-text)]">暂无事件。</p>
+        )}
+      </article>
     </section>
   );
 }
