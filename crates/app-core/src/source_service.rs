@@ -100,7 +100,7 @@ impl<'a> SourceService<'a> {
         let loaded = self.load_installed_plugin(&source.plugin_id)?;
         let config_repository = SourceConfigRepository::new(self.db);
         let stored = config_repository.get_all(&source.id)?;
-        let masked = self.inflate_and_mask_config(&source, &loaded, &stored)?;
+        let masked = self.inflate_source_config(&source, &loaded, &stored, true)?;
 
         Ok(Some(SourceWithConfig {
             source,
@@ -117,7 +117,7 @@ impl<'a> SourceService<'a> {
         for source in sources {
             let loaded = self.load_installed_plugin(&source.plugin_id)?;
             let stored = config_repository.get_all(&source.id)?;
-            let masked = self.inflate_and_mask_config(&source, &loaded, &stored)?;
+            let masked = self.inflate_source_config(&source, &loaded, &stored, true)?;
             result.push(SourceWithConfig {
                 source,
                 config: masked,
@@ -125,6 +125,23 @@ impl<'a> SourceService<'a> {
         }
 
         Ok(result)
+    }
+
+    pub(crate) fn get_source_for_runtime(
+        &self,
+        source_id: &str,
+    ) -> CoreResult<Option<SourceWithConfig>> {
+        let source_repository = SourceRepository::new(self.db);
+        let source = match source_repository.get_by_id(source_id)? {
+            Some(source) => source,
+            None => return Ok(None),
+        };
+        let loaded = self.load_installed_plugin(&source.plugin_id)?;
+        let config_repository = SourceConfigRepository::new(self.db);
+        let stored = config_repository.get_all(&source.id)?;
+        let config = self.inflate_source_config(&source, &loaded, &stored, false)?;
+
+        Ok(Some(SourceWithConfig { source, config }))
     }
 
     pub fn update_source_config(
@@ -322,11 +339,12 @@ impl<'a> SourceService<'a> {
         Ok(())
     }
 
-    fn inflate_and_mask_config(
+    fn inflate_source_config(
         &self,
         source: &SourceInstance,
         loaded: &LoadedPlugin,
         stored: &BTreeMap<String, String>,
+        mask_secret: bool,
     ) -> CoreResult<BTreeMap<String, Value>> {
         let mut config = BTreeMap::new();
         for (key, raw) in stored {
@@ -340,14 +358,35 @@ impl<'a> SourceService<'a> {
             }
         }
 
-        let secret_keys = self
-            .secret_store
-            .list_keys(&plugin_scope(&source.plugin_id))?
-            .into_iter()
-            .collect::<BTreeSet<_>>();
+        let scope = plugin_scope(&source.plugin_id);
+        let secret_keys = if mask_secret {
+            Some(
+                self.secret_store
+                    .list_keys(&scope)?
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+            )
+        } else {
+            None
+        };
         for key in &loaded.manifest.secret_fields {
-            if secret_keys.contains(key) {
-                config.insert(key.clone(), Value::String(SECRET_PLACEHOLDER.to_string()));
+            if mask_secret {
+                if secret_keys.as_ref().is_some_and(|keys| keys.contains(key)) {
+                    config.insert(key.clone(), Value::String(SECRET_PLACEHOLDER.to_string()));
+                }
+                continue;
+            }
+
+            let Some(property) = loaded.schema.properties.get(key) else {
+                continue;
+            };
+            match self.secret_store.get(&scope, key) {
+                Ok(secret) => {
+                    let value = inflate_typed_value(key, property, secret.as_str())?;
+                    config.insert(key.clone(), value);
+                }
+                Err(SecretError::SecretMissing(_)) => {}
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(config)

@@ -633,7 +633,7 @@ async fn refresh_source_handler(
     let engine = Engine::new(
         state.database.as_ref(),
         &state.plugins_dir,
-        state.secret_store.as_ref(),
+        Arc::clone(&state.secret_store),
     );
     let result = engine.refresh_source(&id, "manual").await;
 
@@ -715,7 +715,7 @@ async fn create_profile_handler(
     let engine = Engine::new(
         state.database.as_ref(),
         &state.plugins_dir,
-        state.secret_store.as_ref(),
+        Arc::clone(&state.secret_store),
     );
     if let Err(error) = engine.ensure_profile_export_token(&profile.id) {
         let _ = repository.delete(&profile.id);

@@ -170,12 +170,26 @@ where
             CoreError::SubscriptionParse(format!("订阅内容不是 UTF-8：{error}"))
         })?;
         let nodes = self.parser.parse(source_instance_id, payload)?;
-
-        let now = now_rfc3339()?;
-        let cache_repository = NodeCacheRepository::new(self.db);
-        cache_repository.upsert_nodes(source_instance_id, &nodes, &now, None)?;
+        self.cache_nodes(source_instance_id, &nodes)?;
 
         Ok(nodes)
+    }
+
+    pub fn parse_and_cache_content(
+        &self,
+        source_instance_id: &str,
+        payload: &str,
+    ) -> CoreResult<Vec<ProxyNode>> {
+        let nodes = self.parser.parse(source_instance_id, payload)?;
+        self.cache_nodes(source_instance_id, &nodes)?;
+        Ok(nodes)
+    }
+
+    fn cache_nodes(&self, source_instance_id: &str, nodes: &[ProxyNode]) -> CoreResult<()> {
+        let now = now_rfc3339()?;
+        let cache_repository = NodeCacheRepository::new(self.db);
+        cache_repository.upsert_nodes(source_instance_id, nodes, &now, None)?;
+        Ok(())
     }
 
     fn build_request_headers(&self, user_agent: Option<&str>) -> CoreResult<HeaderMap> {

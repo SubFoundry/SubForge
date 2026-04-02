@@ -157,6 +157,71 @@ fn create_static_plugin_with_network_profile(
     path
 }
 
+fn create_script_plugin_dir(
+    base: &Path,
+    dir_name: &str,
+    plugin_id: &str,
+    login_script: Option<&str>,
+    refresh_script: Option<&str>,
+    fetch_script: &str,
+) -> PathBuf {
+    let path = base.join(dir_name);
+    let scripts_dir = path.join("scripts");
+    fs::create_dir_all(&scripts_dir).expect("创建脚本插件目录失败");
+
+    if let Some(login_script) = login_script {
+        fs::write(scripts_dir.join("login.lua"), login_script).expect("写入 login.lua 失败");
+    }
+    if let Some(refresh_script) = refresh_script {
+        fs::write(scripts_dir.join("refresh.lua"), refresh_script).expect("写入 refresh.lua 失败");
+    }
+    fs::write(scripts_dir.join("fetch.lua"), fetch_script).expect("写入 fetch.lua 失败");
+
+    let login_entry = if login_script.is_some() {
+        r#""login": "scripts/login.lua","#
+    } else {
+        ""
+    };
+    let refresh_entry = if refresh_script.is_some() {
+        r#""refresh": "scripts/refresh.lua","#
+    } else {
+        ""
+    };
+    let plugin_json = format!(
+        r#"{{
+            "plugin_id": "{plugin_id}",
+            "spec_version": "1.0",
+            "name": "{plugin_id}",
+            "version": "1.0.0",
+            "type": "script",
+            "config_schema": "schema.json",
+            "secret_fields": [],
+            "entrypoints": {{
+                {login_entry}
+                {refresh_entry}
+                "fetch": "scripts/fetch.lua"
+            }},
+            "capabilities": ["http", "cookie", "json", "html", "base64", "secret", "log", "time"],
+            "network_profile": "standard"
+        }}"#
+    );
+    fs::write(path.join("plugin.json"), plugin_json).expect("写入脚本插件 plugin.json 失败");
+    fs::write(
+        path.join("schema.json"),
+        r#"{
+            "type": "object",
+            "required": ["seed"],
+            "properties": {
+                "seed": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        }"#,
+    )
+    .expect("写入脚本插件 schema.json 失败");
+
+    path
+}
+
 fn sample_source(id: &str, plugin_id: &str) -> app_common::SourceInstance {
     app_common::SourceInstance {
         id: id.to_string(),

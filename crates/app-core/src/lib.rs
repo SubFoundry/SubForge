@@ -5,6 +5,7 @@ mod error;
 mod fetcher;
 mod parser;
 mod plugin_install;
+mod script_executor;
 mod source_service;
 mod utils;
 

@@ -1,17 +1,20 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use app_common::PluginType;
 use app_secrets::SecretStore;
 use app_storage::{Database, ExportToken, ExportTokenRepository, RefreshJob, RefreshJobRepository};
 use serde_json::Value;
 use time::OffsetDateTime;
 
+use crate::script_executor::ScriptExecutor;
 use crate::utils::{generate_secure_token, now_rfc3339};
 use crate::{CoreError, CoreResult, SourceService, StaticFetcher};
 
 #[derive(Debug)]
 pub struct Engine<'a> {
     db: &'a Database,
-    secret_store: &'a dyn SecretStore,
+    secret_store: Arc<dyn SecretStore>,
     plugins_dir: PathBuf,
 }
 
@@ -26,7 +29,7 @@ impl<'a> Engine<'a> {
     pub fn new(
         db: &'a Database,
         plugins_dir: impl Into<PathBuf>,
-        secret_store: &'a dyn SecretStore,
+        secret_store: Arc<dyn SecretStore>,
     ) -> Self {
         Self {
             db,
@@ -40,23 +43,12 @@ impl<'a> Engine<'a> {
         source_id: &str,
         trigger_type: &str,
     ) -> CoreResult<SourceRefreshResult> {
-        let source_service = SourceService::new(self.db, &self.plugins_dir, self.secret_store);
+        let source_service =
+            SourceService::new(self.db, &self.plugins_dir, self.secret_store.as_ref());
         let source = source_service
-            .get_source(source_id)?
+            .get_source_for_runtime(source_id)?
             .ok_or_else(|| CoreError::SourceNotFound(source_id.to_string()))?;
         let loaded_plugin = source_service.load_installed_plugin(&source.source.plugin_id)?;
-
-        let url = source
-            .config
-            .get("url")
-            .and_then(Value::as_str)
-            .ok_or_else(|| CoreError::ConfigInvalid("来源配置缺少 url 字段".to_string()))?
-            .to_string();
-        let user_agent = source
-            .config
-            .get("user_agent")
-            .and_then(Value::as_str)
-            .map(str::to_string);
 
         let refresh_job_id = format!(
             "refresh-job-{}",
@@ -75,13 +67,36 @@ impl<'a> Engine<'a> {
             error_message: None,
         })?;
 
-        let fetcher = StaticFetcher::new_with_network_profile(
-            self.db,
-            &loaded_plugin.manifest.network_profile,
-        )?;
-        let result = fetcher
-            .fetch_and_cache(source_id, &url, user_agent.as_deref())
-            .await;
+        let result = match &loaded_plugin.manifest.plugin_type {
+            PluginType::Static => {
+                let url = source
+                    .config
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| CoreError::ConfigInvalid("来源配置缺少 url 字段".to_string()))?
+                    .to_string();
+                let user_agent = source
+                    .config
+                    .get("user_agent")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+
+                let fetcher = StaticFetcher::new_with_network_profile(
+                    self.db,
+                    &loaded_plugin.manifest.network_profile,
+                )?;
+                fetcher
+                    .fetch_and_cache(source_id, &url, user_agent.as_deref())
+                    .await
+            }
+            PluginType::Script => {
+                let script_executor = ScriptExecutor::new(self.db, Arc::clone(&self.secret_store));
+                script_executor
+                    .execute(&source, &loaded_plugin, trigger_type)
+                    .await
+                    .map(|output| output.nodes)
+            }
+        };
         match result {
             Ok(nodes) => {
                 let node_count = i64::try_from(nodes.len())
