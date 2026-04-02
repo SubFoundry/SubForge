@@ -1,0 +1,35 @@
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "select",
+      "outbounds": [
+        "auto",
+        "TROJAN-JP"
+      ],
+      "default": "auto"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": [
+        "TROJAN-JP"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "5m",
+      "tolerance": 50
+    },
+    {
+      "type": "trojan",
+      "tag": "TROJAN-JP",
+      "server": "trojan-jp.example.com",
+      "server_port": 443,
+      "password": "trojan-pass",
+      "network": "tcp",
+      "tls": {
+        "enabled": true,
+        "server_name": "tls.example.com"
+      }
+    }
+  ]
+}

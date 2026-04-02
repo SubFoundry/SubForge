@@ -1,0 +1,42 @@
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "select",
+      "outbounds": [
+        "auto",
+        "TUIC-SG"
+      ],
+      "default": "auto"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": [
+        "TUIC-SG"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "5m",
+      "tolerance": 50
+    },
+    {
+      "type": "tuic",
+      "tag": "TUIC-SG",
+      "server": "tuic-sg.example.com",
+      "server_port": 443,
+      "password": "tuic-pass",
+      "uuid": "33333333-3333-3333-3333-333333333333",
+      "network": "tcp",
+      "tls": {
+        "enabled": true,
+        "server_name": "tls.example.com",
+        "alpn": [
+          "h3",
+          "h3-29"
+        ]
+      },
+      "congestion_control": "bbr",
+      "udp_relay_mode": "native"
+    }
+  ]
+}

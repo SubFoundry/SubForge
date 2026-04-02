@@ -23,6 +23,8 @@ pub enum TransformError {
     },
     #[error("YAML 序列化失败：{0}")]
     SerializeYaml(String),
+    #[error("JSON 序列化失败：{0}")]
+    SerializeJson(String),
 }
 
 impl TransformError {
@@ -34,6 +36,12 @@ impl TransformError {
 impl From<serde_yaml::Error> for TransformError {
     fn from(error: serde_yaml::Error) -> Self {
         Self::SerializeYaml(error.to_string())
+    }
+}
+
+impl From<serde_json::Error> for TransformError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::SerializeJson(error.to_string())
     }
 }
 
@@ -118,6 +126,261 @@ impl ClashTransformer {
         }
 
         groups
+    }
+}
+
+/// sing-box JSON 转换器。
+#[derive(Debug, Clone)]
+pub struct SingboxTransformer {
+    auto_test_url: String,
+    auto_test_interval: String,
+    auto_test_tolerance: u16,
+}
+
+impl Default for SingboxTransformer {
+    fn default() -> Self {
+        Self {
+            auto_test_url: "https://www.gstatic.com/generate_204".to_string(),
+            auto_test_interval: "5m".to_string(),
+            auto_test_tolerance: 50,
+        }
+    }
+}
+
+impl Transformer for SingboxTransformer {
+    fn transform(&self, nodes: &[ProxyNode], _profile: &Profile) -> TransformResult<String> {
+        let mut node_tags = Vec::with_capacity(nodes.len());
+        let mut outbounds = Vec::with_capacity(nodes.len() + 2);
+
+        for node in nodes {
+            node_tags.push(node.name.clone());
+            outbounds.push(build_singbox_node_outbound(node)?);
+        }
+
+        let mut selector_targets = Vec::with_capacity(node_tags.len() + 1);
+        push_unique_proxy_name(&mut selector_targets, "auto");
+        for tag in &node_tags {
+            push_unique_proxy_name(&mut selector_targets, tag);
+        }
+
+        outbounds.insert(
+            0,
+            SingboxOutbound {
+                outbound_type: "urltest".to_string(),
+                tag: "auto".to_string(),
+                outbounds: Some(node_tags),
+                default: None,
+                url: Some(self.auto_test_url.clone()),
+                interval: Some(self.auto_test_interval.clone()),
+                tolerance: Some(self.auto_test_tolerance),
+                server: None,
+                server_port: None,
+                method: None,
+                password: None,
+                uuid: None,
+                security: None,
+                alter_id: None,
+                flow: None,
+                network: None,
+                tls: None,
+                transport: None,
+                obfs: None,
+                congestion_control: None,
+                udp_relay_mode: None,
+            },
+        );
+
+        outbounds.insert(
+            0,
+            SingboxOutbound {
+                outbound_type: "selector".to_string(),
+                tag: "select".to_string(),
+                outbounds: Some(selector_targets),
+                default: Some("auto".to_string()),
+                url: None,
+                interval: None,
+                tolerance: None,
+                server: None,
+                server_port: None,
+                method: None,
+                password: None,
+                uuid: None,
+                security: None,
+                alter_id: None,
+                flow: None,
+                network: None,
+                tls: None,
+                transport: None,
+                obfs: None,
+                congestion_control: None,
+                udp_relay_mode: None,
+            },
+        );
+
+        let config = SingboxConfig { outbounds };
+        Ok(serde_json::to_string_pretty(&config)?)
+    }
+}
+
+fn build_singbox_node_outbound(node: &ProxyNode) -> TransformResult<SingboxOutbound> {
+    let tls = build_singbox_tls(node);
+    let transport = build_singbox_transport(node);
+
+    let mut outbound = SingboxOutbound {
+        outbound_type: String::new(),
+        tag: node.name.clone(),
+        outbounds: None,
+        default: None,
+        url: None,
+        interval: None,
+        tolerance: None,
+        server: Some(node.server.clone()),
+        server_port: Some(node.port),
+        method: None,
+        password: None,
+        uuid: None,
+        security: None,
+        alter_id: None,
+        flow: None,
+        network: None,
+        tls,
+        transport: None,
+        obfs: None,
+        congestion_control: None,
+        udp_relay_mode: None,
+    };
+
+    match node.protocol {
+        ProxyProtocol::Ss => {
+            outbound.outbound_type = "shadowsocks".to_string();
+            outbound.method = Some(required_string(node, "cipher")?);
+            outbound.password = Some(required_string(node, "password")?);
+            outbound.tls = None;
+            outbound.transport = None;
+        }
+        ProxyProtocol::Vmess => {
+            outbound.outbound_type = "vmess".to_string();
+            outbound.uuid = Some(required_string(node, "uuid")?);
+            outbound.security = optional_string(node, "security")
+                .or_else(|| optional_string(node, "cipher"))
+                .or(Some("auto".to_string()));
+            outbound.alter_id = optional_u32(node, "alter_id").or(Some(0));
+            outbound.network = Some("tcp".to_string());
+            outbound.transport = transport;
+        }
+        ProxyProtocol::Vless => {
+            outbound.outbound_type = "vless".to_string();
+            outbound.uuid = Some(required_string(node, "uuid")?);
+            outbound.flow = optional_string(node, "flow");
+            outbound.network = Some("tcp".to_string());
+            outbound.transport = transport;
+        }
+        ProxyProtocol::Trojan => {
+            outbound.outbound_type = "trojan".to_string();
+            outbound.password = Some(required_string(node, "password")?);
+            outbound.network = Some("tcp".to_string());
+            outbound.transport = transport;
+        }
+        ProxyProtocol::Hysteria2 => {
+            outbound.outbound_type = "hysteria2".to_string();
+            outbound.password = Some(
+                optional_string(node, "password")
+                    .or_else(|| optional_string(node, "auth"))
+                    .ok_or_else(|| TransformError::MissingField {
+                        node_name: node.name.clone(),
+                        field: "password/auth",
+                    })?,
+            );
+            if let Some(obfs_type) = optional_string(node, "obfs") {
+                outbound.obfs = Some(SingboxObfs {
+                    obfs_type,
+                    password: optional_string(node, "obfs_password"),
+                });
+            }
+            outbound.transport = None;
+        }
+        ProxyProtocol::Tuic => {
+            outbound.outbound_type = "tuic".to_string();
+            outbound.uuid = Some(required_string(node, "uuid")?);
+            outbound.password = Some(required_string(node, "password")?);
+            outbound.congestion_control = optional_string(node, "congestion_control");
+            outbound.udp_relay_mode = optional_string(node, "udp_relay_mode");
+            outbound.network = Some("tcp".to_string());
+            outbound.transport = None;
+        }
+    }
+
+    Ok(outbound)
+}
+
+fn build_singbox_tls(node: &ProxyNode) -> Option<SingboxTls> {
+    let server_name = node
+        .tls
+        .server_name
+        .clone()
+        .or_else(|| optional_string(node, "sni"));
+    let insecure = optional_bool(node, "skip_cert_verify");
+    let alpn = optional_string_list(node, "alpn");
+    let has_fields =
+        server_name.is_some() || insecure.is_some() || alpn.is_some() || node.tls.enabled;
+    if !has_fields {
+        return None;
+    }
+
+    Some(SingboxTls {
+        enabled: node.tls.enabled,
+        server_name,
+        insecure,
+        alpn,
+    })
+}
+
+fn build_singbox_transport(node: &ProxyNode) -> Option<SingboxTransport> {
+    match node.transport {
+        ProxyTransport::Tcp => None,
+        ProxyTransport::Ws => {
+            let mut headers = BTreeMap::new();
+            if let Some(host) = optional_string(node, "host") {
+                headers.insert("Host".to_string(), host);
+            }
+            Some(SingboxTransport {
+                transport_type: "ws".to_string(),
+                path: optional_string(node, "path"),
+                headers: (!headers.is_empty()).then_some(headers),
+                host: None,
+                service_name: None,
+                max_early_data: optional_u32(node, "max_early_data"),
+                early_data_header_name: optional_string(node, "early_data_header_name"),
+            })
+        }
+        ProxyTransport::Grpc => Some(SingboxTransport {
+            transport_type: "grpc".to_string(),
+            path: None,
+            headers: None,
+            host: None,
+            service_name: optional_string(node, "grpc_service_name")
+                .or_else(|| optional_string(node, "service_name")),
+            max_early_data: None,
+            early_data_header_name: None,
+        }),
+        ProxyTransport::H2 => Some(SingboxTransport {
+            transport_type: "http".to_string(),
+            path: optional_string(node, "path"),
+            headers: None,
+            host: optional_string_list(node, "host"),
+            service_name: None,
+            max_early_data: None,
+            early_data_header_name: None,
+        }),
+        ProxyTransport::Quic => Some(SingboxTransport {
+            transport_type: "quic".to_string(),
+            path: None,
+            headers: None,
+            host: None,
+            service_name: None,
+            max_early_data: None,
+            early_data_header_name: None,
+        }),
     }
 }
 
@@ -498,6 +761,93 @@ struct ClashH2Options {
     path: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct SingboxConfig {
+    outbounds: Vec<SingboxOutbound>,
+}
+
+#[derive(Debug, Serialize)]
+struct SingboxOutbound {
+    #[serde(rename = "type")]
+    outbound_type: String,
+    tag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outbounds: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tolerance: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server: Option<String>,
+    #[serde(rename = "server_port", skip_serializing_if = "Option::is_none")]
+    server_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uuid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    security: Option<String>,
+    #[serde(rename = "alter_id", skip_serializing_if = "Option::is_none")]
+    alter_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flow: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tls: Option<SingboxTls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport: Option<SingboxTransport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    obfs: Option<SingboxObfs>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    congestion_control: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    udp_relay_mode: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SingboxTls {
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    insecure: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alpn: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+struct SingboxTransport {
+    #[serde(rename = "type")]
+    transport_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    headers: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_early_data: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    early_data_header_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SingboxObfs {
+    #[serde(rename = "type")]
+    obfs_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -505,7 +855,7 @@ mod tests {
     use app_common::{ProxyNode, ProxyProtocol, ProxyTransport, TlsConfig};
     use serde_json::{Value, json};
 
-    use super::{ClashTransformer, Transformer};
+    use super::{ClashTransformer, SingboxTransformer, Transformer};
 
     #[test]
     fn snapshot_ss_proxy_yaml() {
@@ -622,6 +972,121 @@ mod tests {
         );
     }
 
+    #[test]
+    fn snapshot_ss_outbound_json() {
+        assert_json_snapshot(
+            build_node(
+                "SS-HK",
+                ProxyProtocol::Ss,
+                ProxyTransport::Tcp,
+                Some("hk"),
+                vec![
+                    ("cipher", Value::String("aes-128-gcm".to_string())),
+                    ("password", Value::String("p@ss".to_string())),
+                ],
+            ),
+            include_str!("fixtures/singbox_ss.json"),
+        );
+    }
+
+    #[test]
+    fn snapshot_vmess_outbound_json() {
+        assert_json_snapshot(
+            build_node(
+                "VMESS-SG",
+                ProxyProtocol::Vmess,
+                ProxyTransport::Ws,
+                Some("sg"),
+                vec![
+                    (
+                        "uuid",
+                        Value::String("11111111-1111-1111-1111-111111111111".to_string()),
+                    ),
+                    ("path", Value::String("/ws".to_string())),
+                    ("host", Value::String("edge.example.com".to_string())),
+                ],
+            ),
+            include_str!("fixtures/singbox_vmess.json"),
+        );
+    }
+
+    #[test]
+    fn snapshot_vless_outbound_json() {
+        assert_json_snapshot(
+            build_node(
+                "VLESS-US",
+                ProxyProtocol::Vless,
+                ProxyTransport::Grpc,
+                Some("us"),
+                vec![
+                    (
+                        "uuid",
+                        Value::String("22222222-2222-2222-2222-222222222222".to_string()),
+                    ),
+                    ("service_name", Value::String("vless-grpc".to_string())),
+                    ("flow", Value::String("xtls-rprx-vision".to_string())),
+                ],
+            ),
+            include_str!("fixtures/singbox_vless.json"),
+        );
+    }
+
+    #[test]
+    fn snapshot_trojan_outbound_json() {
+        assert_json_snapshot(
+            build_node(
+                "TROJAN-JP",
+                ProxyProtocol::Trojan,
+                ProxyTransport::Tcp,
+                Some("jp"),
+                vec![("password", Value::String("trojan-pass".to_string()))],
+            ),
+            include_str!("fixtures/singbox_trojan.json"),
+        );
+    }
+
+    #[test]
+    fn snapshot_hysteria2_outbound_json() {
+        assert_json_snapshot(
+            build_node(
+                "HY2-HK",
+                ProxyProtocol::Hysteria2,
+                ProxyTransport::Quic,
+                Some("hk"),
+                vec![
+                    ("password", Value::String("hy2-pass".to_string())),
+                    ("obfs", Value::String("salamander".to_string())),
+                    ("obfs_password", Value::String("hy2-obfs".to_string())),
+                    ("alpn", json!(["h3"])),
+                ],
+            ),
+            include_str!("fixtures/singbox_hysteria2.json"),
+        );
+    }
+
+    #[test]
+    fn snapshot_tuic_outbound_json() {
+        assert_json_snapshot(
+            build_node(
+                "TUIC-SG",
+                ProxyProtocol::Tuic,
+                ProxyTransport::Quic,
+                Some("sg"),
+                vec![
+                    (
+                        "uuid",
+                        Value::String("33333333-3333-3333-3333-333333333333".to_string()),
+                    ),
+                    ("password", Value::String("tuic-pass".to_string())),
+                    ("congestion_control", Value::String("bbr".to_string())),
+                    ("udp_relay_mode", Value::String("native".to_string())),
+                    ("alpn", json!(["h3", "h3-29"])),
+                ],
+            ),
+            include_str!("fixtures/singbox_tuic.json"),
+        );
+    }
+
     fn assert_snapshot(node: ProxyNode, expected_snapshot: &str) {
         let transformer = ClashTransformer::default();
         let yaml = transformer
@@ -632,6 +1097,19 @@ mod tests {
 
     fn normalize_yaml(yaml: &str) -> String {
         yaml.replace("\r\n", "\n").trim().to_string()
+    }
+
+    fn assert_json_snapshot(node: ProxyNode, expected_snapshot: &str) {
+        let transformer = SingboxTransformer::default();
+        let json = transformer
+            .transform(&[node], &test_profile())
+            .expect("转换 JSON 失败");
+        assert_eq!(normalize_json(&json), normalize_json(expected_snapshot));
+    }
+
+    fn normalize_json(payload: &str) -> String {
+        let value: Value = serde_json::from_str(payload).expect("解析 JSON 快照失败");
+        serde_json::to_string_pretty(&value).expect("序列化 JSON 快照失败")
     }
 
     fn test_profile() -> app_common::Profile {

@@ -1,0 +1,41 @@
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "select",
+      "outbounds": [
+        "auto",
+        "HY2-HK"
+      ],
+      "default": "auto"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": [
+        "HY2-HK"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "5m",
+      "tolerance": 50
+    },
+    {
+      "type": "hysteria2",
+      "tag": "HY2-HK",
+      "server": "hy2-hk.example.com",
+      "server_port": 443,
+      "password": "hy2-pass",
+      "tls": {
+        "enabled": true,
+        "server_name": "tls.example.com",
+        "alpn": [
+          "h3"
+        ]
+      },
+      "obfs": {
+        "type": "salamander",
+        "password": "hy2-obfs"
+      }
+    }
+  ]
+}

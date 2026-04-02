@@ -1,0 +1,44 @@
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "select",
+      "outbounds": [
+        "auto",
+        "VMESS-SG"
+      ],
+      "default": "auto"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": [
+        "VMESS-SG"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "5m",
+      "tolerance": 50
+    },
+    {
+      "type": "vmess",
+      "tag": "VMESS-SG",
+      "server": "vmess-sg.example.com",
+      "server_port": 443,
+      "uuid": "11111111-1111-1111-1111-111111111111",
+      "security": "auto",
+      "alter_id": 0,
+      "network": "tcp",
+      "tls": {
+        "enabled": true,
+        "server_name": "tls.example.com"
+      },
+      "transport": {
+        "type": "ws",
+        "path": "/ws",
+        "headers": {
+          "Host": "edge.example.com"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "select",
+      "outbounds": [
+        "auto",
+        "SS-HK"
+      ],
+      "default": "auto"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": [
+        "SS-HK"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "5m",
+      "tolerance": 50
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "SS-HK",
+      "server": "ss-hk.example.com",
+      "server_port": 443,
+      "method": "aes-128-gcm",
+      "password": "p@ss"
+    }
+  ]
+}
