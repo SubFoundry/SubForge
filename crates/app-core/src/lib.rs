@@ -1,9 +1,11 @@
 //! app-core：业务编排层（调度、刷新、重试、状态机）。
 
 mod error;
+mod fetcher;
 mod utils;
 
 pub use error::{CoreError, CoreResult};
+pub use fetcher::StaticFetcher;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -13,26 +15,22 @@ use app_common::{Plugin, ProxyNode, SourceInstance};
 use app_plugin_runtime::{LoadedPlugin, PluginLoader};
 use app_secrets::{SecretError, SecretStore};
 use app_storage::{
-    Database, ExportToken, ExportTokenRepository, NodeCacheRepository, PluginRepository,
-    RefreshJob, RefreshJobRepository, SourceConfigRepository, SourceRepository,
+    Database, ExportToken, ExportTokenRepository, PluginRepository, RefreshJob,
+    RefreshJobRepository, SourceConfigRepository, SourceRepository,
 };
-use app_transport::{NetworkProfileFactory, TransportProfile};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
-use reqwest::{Client as HttpClient, Url};
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use tokio::time::sleep;
 
 use crate::utils::{
     copy_dir_recursive, generate_secure_token, inflate_typed_value, is_scalar_json, masked_config,
     normalize_subscription_payload, now_rfc3339, parse_proxy_uri_line, plugin_scope,
-    redact_headers_for_log, redact_url_for_log, retry_backoff, sanitize_reqwest_error,
-    stringify_secret_value, validate_content_type, validate_property_value,
+    stringify_secret_value, validate_property_value,
 };
+#[cfg(test)]
+use fetcher::{redact_headers_for_log, redact_url_for_log};
 
 const SECRET_PLACEHOLDER: &str = "••••••";
-const MAX_SUBSCRIPTION_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceWithConfig {
@@ -68,14 +66,6 @@ pub trait SubscriptionParser {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UriListParser;
-
-#[derive(Debug)]
-pub struct StaticFetcher<'a, P: SubscriptionParser = UriListParser> {
-    db: &'a Database,
-    parser: P,
-    client: HttpClient,
-    transport_profile: Box<dyn TransportProfile>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRefreshResult {
@@ -116,194 +106,6 @@ impl SubscriptionParser for UriListParser {
         }
 
         Ok(nodes)
-    }
-}
-
-impl<'a> StaticFetcher<'a, UriListParser> {
-    pub fn new(db: &'a Database) -> CoreResult<Self> {
-        Self::new_with_network_profile(db, "standard")
-    }
-
-    pub fn new_with_network_profile(db: &'a Database, network_profile: &str) -> CoreResult<Self> {
-        Self::with_parser_and_network_profile(db, UriListParser, network_profile)
-    }
-}
-
-impl<'a, P> StaticFetcher<'a, P>
-where
-    P: SubscriptionParser,
-{
-    pub fn with_parser(db: &'a Database, parser: P) -> CoreResult<Self> {
-        Self::with_parser_and_network_profile(db, parser, "standard")
-    }
-
-    pub fn with_parser_and_network_profile(
-        db: &'a Database,
-        parser: P,
-        network_profile: &str,
-    ) -> CoreResult<Self> {
-        let transport_profile = NetworkProfileFactory::create(network_profile)?;
-        let client = transport_profile.build_client()?;
-
-        Ok(Self {
-            db,
-            parser,
-            client,
-            transport_profile,
-        })
-    }
-
-    pub async fn fetch_and_cache(
-        &self,
-        source_instance_id: &str,
-        subscription_url: &str,
-        user_agent: Option<&str>,
-    ) -> CoreResult<Vec<ProxyNode>> {
-        let subscription_url = subscription_url.trim();
-        if subscription_url.is_empty() {
-            return Err(CoreError::ConfigInvalid("订阅 URL 不能为空".to_string()));
-        }
-
-        let url = Url::parse(subscription_url)
-            .map_err(|error| CoreError::ConfigInvalid(format!("订阅 URL 非法：{error}")))?;
-        let headers = self.build_request_headers(user_agent)?;
-        let redacted_url = redact_url_for_log(&url);
-        let redacted_headers = redact_headers_for_log(&headers);
-        let started = std::time::Instant::now();
-        let profile_name = self.transport_profile.profile_name();
-
-        let mut retry_attempt = 0usize;
-        let response = loop {
-            if retry_attempt > 0 {
-                let backoff = retry_backoff(self.transport_profile.request_delay(), retry_attempt);
-                sleep(backoff).await;
-            }
-            let response = self
-                .client
-                .get(url.clone())
-                .headers(headers.clone())
-                .send()
-                .await
-                .map_err(|error| {
-                    let sanitized = sanitize_reqwest_error(&error, &url);
-                    eprintln!(
-                        "WARN: 订阅请求失败 source_id={} profile={} url={} elapsed_ms={} request_headers={} error={}",
-                        source_instance_id,
-                        profile_name,
-                        redacted_url,
-                        started.elapsed().as_millis(),
-                        redacted_headers,
-                        sanitized
-                    );
-                    CoreError::SubscriptionFetch(sanitized)
-                })?;
-
-            let status = response.status();
-            if status.is_success() {
-                eprintln!(
-                    "INFO: 订阅请求成功 source_id={} profile={} url={} status={} elapsed_ms={} retries={} request_headers={}",
-                    source_instance_id,
-                    profile_name,
-                    redacted_url,
-                    status.as_u16(),
-                    started.elapsed().as_millis(),
-                    retry_attempt,
-                    redacted_headers
-                );
-                break response;
-            }
-            if retry_attempt < self.transport_profile.max_retries()
-                && self.transport_profile.is_retryable_status(status)
-            {
-                eprintln!(
-                    "WARN: 订阅请求触发重试 source_id={} profile={} url={} status={} elapsed_ms={} retry={}/{} request_headers={}",
-                    source_instance_id,
-                    profile_name,
-                    redacted_url,
-                    status.as_u16(),
-                    started.elapsed().as_millis(),
-                    retry_attempt + 1,
-                    self.transport_profile.max_retries(),
-                    redacted_headers
-                );
-                retry_attempt += 1;
-                continue;
-            }
-            eprintln!(
-                "WARN: 订阅请求状态异常 source_id={} profile={} url={} status={} elapsed_ms={} retries={} request_headers={}",
-                source_instance_id,
-                profile_name,
-                redacted_url,
-                status.as_u16(),
-                started.elapsed().as_millis(),
-                retry_attempt,
-                redacted_headers
-            );
-            return Err(CoreError::SubscriptionFetch(format!(
-                "上游响应状态码异常：{}",
-                status.as_u16()
-            )));
-        };
-
-        validate_content_type(response.headers())?;
-        if let Some(content_length) = response.content_length() {
-            if content_length > MAX_SUBSCRIPTION_BYTES as u64 {
-                return Err(CoreError::SubscriptionFetch(format!(
-                    "上游响应体过大：{} bytes（限制 {} bytes）",
-                    content_length, MAX_SUBSCRIPTION_BYTES
-                )));
-            }
-        }
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| CoreError::SubscriptionFetch(error.to_string()))?;
-        if bytes.len() > MAX_SUBSCRIPTION_BYTES {
-            return Err(CoreError::SubscriptionFetch(format!(
-                "上游响应体过大：{} bytes（限制 {} bytes）",
-                bytes.len(),
-                MAX_SUBSCRIPTION_BYTES
-            )));
-        }
-
-        let payload = std::str::from_utf8(&bytes).map_err(|error| {
-            CoreError::SubscriptionParse(format!("订阅内容不是 UTF-8：{error}"))
-        })?;
-        let nodes = self.parser.parse(source_instance_id, payload)?;
-
-        let now = now_rfc3339()?;
-        let cache_repository = NodeCacheRepository::new(self.db);
-        cache_repository.upsert_nodes(source_instance_id, &nodes, &now, None)?;
-
-        Ok(nodes)
-    }
-
-    fn build_request_headers(&self, user_agent: Option<&str>) -> CoreResult<HeaderMap> {
-        let mut headers = HeaderMap::new();
-        for (name, value) in self.transport_profile.default_headers() {
-            let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
-                CoreError::ConfigInvalid(format!("传输层默认 Header 名非法（{name}）：{error}"))
-            })?;
-            let header_value = HeaderValue::from_str(value).map_err(|error| {
-                CoreError::ConfigInvalid(format!("传输层默认 Header 值非法（{name}）：{error}"))
-            })?;
-            headers.insert(header_name, header_value);
-        }
-
-        if let Some(user_agent) = user_agent {
-            let user_agent = user_agent.trim();
-            if !user_agent.is_empty() {
-                headers.insert(
-                    USER_AGENT,
-                    user_agent.parse().map_err(|error| {
-                        CoreError::ConfigInvalid(format!("user_agent 非法：{error}"))
-                    })?,
-                );
-            }
-        }
-
-        Ok(headers)
     }
 }
 
