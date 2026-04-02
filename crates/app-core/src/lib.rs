@@ -2,16 +2,18 @@
 
 mod error;
 mod fetcher;
+mod parser;
 mod utils;
 
 pub use error::{CoreError, CoreResult};
 pub use fetcher::StaticFetcher;
+pub use parser::{SubscriptionParser, UriListParser};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use app_common::{Plugin, ProxyNode, SourceInstance};
+use app_common::{Plugin, SourceInstance};
 use app_plugin_runtime::{LoadedPlugin, PluginLoader};
 use app_secrets::{SecretError, SecretStore};
 use app_storage::{
@@ -24,8 +26,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::utils::{
     copy_dir_recursive, generate_secure_token, inflate_typed_value, is_scalar_json, masked_config,
-    normalize_subscription_payload, now_rfc3339, parse_proxy_uri_line, plugin_scope,
-    stringify_secret_value, validate_property_value,
+    now_rfc3339, plugin_scope, stringify_secret_value, validate_property_value,
 };
 #[cfg(test)]
 use fetcher::{redact_headers_for_log, redact_url_for_log};
@@ -60,13 +61,6 @@ pub struct PluginInstallService<'a> {
     plugins_dir: PathBuf,
 }
 
-pub trait SubscriptionParser {
-    fn parse(&self, source_id: &str, payload: &str) -> CoreResult<Vec<ProxyNode>>;
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct UriListParser;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRefreshResult {
     pub refresh_job_id: String,
@@ -78,35 +72,6 @@ struct PreparedConfig {
     normalized: BTreeMap<String, Value>,
     non_secret: BTreeMap<String, String>,
     secret: BTreeMap<String, String>,
-}
-
-impl SubscriptionParser for UriListParser {
-    fn parse(&self, source_id: &str, payload: &str) -> CoreResult<Vec<ProxyNode>> {
-        let normalized = normalize_subscription_payload(payload);
-        let updated_at = now_rfc3339()?;
-        let mut nodes = Vec::new();
-
-        for (line_number, raw_line) in normalized.lines().enumerate() {
-            let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            match parse_proxy_uri_line(line, source_id, &updated_at) {
-                Ok(node) => nodes.push(node),
-                Err(error) => {
-                    eprintln!(
-                        "WARN: 解析订阅行失败（source_id={}, line={}）：{}",
-                        source_id,
-                        line_number + 1,
-                        error
-                    );
-                }
-            }
-        }
-
-        Ok(nodes)
-    }
 }
 
 impl<'a> SourceService<'a> {
