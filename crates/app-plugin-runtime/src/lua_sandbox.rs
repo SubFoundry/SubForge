@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use app_secrets::{MemorySecretStore, SecretStore};
 use app_transport::{NetworkProfileFactory, TransportProfile};
 use base64::Engine;
 use mlua::{
@@ -15,6 +17,7 @@ use mlua::{
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, Url};
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -28,6 +31,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 20;
 const DEFAULT_HOOK_STEP: u32 = 1000;
 const DEFAULT_MAX_INSTRUCTIONS: u64 = 100_000_000;
 const DEFAULT_NETWORK_PROFILE: &str = "standard";
+const DEFAULT_PLUGIN_ID: &str = "runtime.default";
 const SCRIPT_HTTP_TIMEOUT_MS: u64 = 15_000;
 const SCRIPT_HTTP_MAX_REQUESTS: usize = 20;
 const SCRIPT_HTTP_MAX_REDIRECTS: usize = 5;
@@ -58,6 +62,8 @@ pub struct LuaSandboxConfig {
     pub max_instructions: u64,
     pub instruction_hook_step: u32,
     pub network_profile: String,
+    pub plugin_id: String,
+    pub secret_store: Arc<dyn SecretStore>,
 }
 
 impl Default for LuaSandboxConfig {
@@ -68,6 +74,8 @@ impl Default for LuaSandboxConfig {
             max_instructions: DEFAULT_MAX_INSTRUCTIONS,
             instruction_hook_step: DEFAULT_HOOK_STEP,
             network_profile: DEFAULT_NETWORK_PROFILE.to_string(),
+            plugin_id: DEFAULT_PLUGIN_ID.to_string(),
+            secret_store: Arc::new(MemorySecretStore::new()),
         }
     }
 }
@@ -97,11 +105,22 @@ impl LuaSandboxConfig {
         self.network_profile = profile.into();
         self
     }
+
+    pub fn with_plugin_id(mut self, plugin_id: impl Into<String>) -> Self {
+        self.plugin_id = plugin_id.into();
+        self
+    }
+
+    pub fn with_secret_store(mut self, secret_store: Arc<dyn SecretStore>) -> Self {
+        self.secret_store = secret_store;
+        self
+    }
 }
 
 pub struct LuaSandbox {
     lua: Lua,
     config: LuaSandboxConfig,
+    http_request_counter: Arc<AtomicUsize>,
 }
 
 impl LuaSandbox {
@@ -110,14 +129,42 @@ impl LuaSandbox {
     }
 
     pub fn new_with_config(config: LuaSandboxConfig) -> PluginRuntimeResult<Self> {
+        if config.plugin_id.trim().is_empty() {
+            return Err(PluginRuntimeError::ScriptRuntime(
+                "plugin_id 不能为空".to_string(),
+            ));
+        }
+
+        let secret_scope = format!("plugin:{}", config.plugin_id);
+        config
+            .secret_store
+            .list_keys(&secret_scope)
+            .map_err(|error| {
+                PluginRuntimeError::ScriptRuntime(format!(
+                    "secret 命名空间初始化失败（{secret_scope}）：{error}"
+                ))
+            })?;
+
         let lua =
             Lua::new_with(mlua::StdLib::ALL_SAFE, LuaOptions::default()).map_err(map_lua_error)?;
         lua.set_memory_limit(config.memory_limit_bytes)
             .map_err(map_lua_error)?;
+        let cookie_store = Arc::new(Mutex::new(HashMap::new()));
+        let http_request_counter = Arc::new(AtomicUsize::new(0));
         disable_globals(&lua)?;
-        register_runtime_apis(&lua, &config)?;
+        register_runtime_apis(
+            &lua,
+            &config,
+            Arc::clone(&cookie_store),
+            secret_scope,
+            Arc::clone(&http_request_counter),
+        )?;
 
-        Ok(Self { lua, config })
+        Ok(Self {
+            lua,
+            config,
+            http_request_counter,
+        })
     }
 
     pub fn exec_file(
@@ -128,6 +175,7 @@ impl LuaSandbox {
     ) -> PluginRuntimeResult<Value> {
         let script_path = path.as_ref();
         let script_content = fs::read_to_string(script_path)?;
+        self.http_request_counter.store(0, AtomicOrdering::Relaxed);
         self.install_limits_hook()?;
 
         let execution_result = (|| -> PluginRuntimeResult<Value> {
@@ -188,6 +236,12 @@ struct HttpRequestInput {
     timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+struct CookieEntry {
+    value: String,
+    attrs: std::collections::BTreeMap<String, String>,
+}
+
 #[derive(Debug, Serialize)]
 struct HttpResponseOutput {
     status: u16,
@@ -196,12 +250,21 @@ struct HttpResponseOutput {
     final_url: String,
 }
 
-fn register_runtime_apis(lua: &Lua, config: &LuaSandboxConfig) -> PluginRuntimeResult<()> {
+fn register_runtime_apis(
+    lua: &Lua,
+    config: &LuaSandboxConfig,
+    cookie_store: Arc<Mutex<HashMap<String, CookieEntry>>>,
+    secret_scope: String,
+    request_counter: Arc<AtomicUsize>,
+) -> PluginRuntimeResult<()> {
     register_json_api(lua)?;
     register_base64_api(lua)?;
     register_time_api(lua)?;
     register_log_api(lua)?;
-    register_http_api(lua, &config.network_profile)?;
+    register_html_api(lua)?;
+    register_cookie_api(lua, Arc::clone(&cookie_store))?;
+    register_secret_api(lua, Arc::clone(&config.secret_store), secret_scope)?;
+    register_http_api(lua, &config.network_profile, cookie_store, request_counter)?;
     Ok(())
 }
 
@@ -307,12 +370,119 @@ fn register_log_api(lua: &Lua) -> PluginRuntimeResult<()> {
     Ok(())
 }
 
-fn register_http_api(lua: &Lua, network_profile: &str) -> PluginRuntimeResult<()> {
+fn register_html_api(lua: &Lua) -> PluginRuntimeResult<()> {
+    let html_table = lua.create_table().map_err(map_lua_error)?;
+    let query_fn = lua
+        .create_function(|lua, (raw_html, selector): (String, String)| {
+            let selector = Selector::parse(selector.trim())
+                .map_err(|error| LuaError::runtime(format!("html.query selector 非法：{error}")))?;
+            let document = Html::parse_document(&raw_html);
+            let mut matches = Vec::new();
+            for node in document.select(&selector) {
+                let text = normalize_html_text(node.text().collect::<Vec<_>>().join(" "));
+                matches.push(text);
+            }
+            lua.to_value(&matches)
+        })
+        .map_err(map_lua_error)?;
+    html_table.set("query", query_fn).map_err(map_lua_error)?;
+
+    let globals = lua.globals();
+    globals.set("html", html_table).map_err(map_lua_error)?;
+    Ok(())
+}
+
+fn register_cookie_api(
+    lua: &Lua,
+    cookie_store: Arc<Mutex<HashMap<String, CookieEntry>>>,
+) -> PluginRuntimeResult<()> {
+    let cookie_table = lua.create_table().map_err(map_lua_error)?;
+
+    let get_store = Arc::clone(&cookie_store);
+    let get_fn = lua
+        .create_function(move |_, name: String| {
+            let jar = get_store
+                .lock()
+                .map_err(|_| LuaError::runtime("cookie.get 无法获取会话锁"))?;
+            Ok(jar.get(name.trim()).map(|entry| entry.value.clone()))
+        })
+        .map_err(map_lua_error)?;
+
+    let set_store = Arc::clone(&cookie_store);
+    let set_fn = lua
+        .create_function(
+            move |_, (name, value, attrs): (String, String, Option<Table>)| {
+                let mut jar = set_store
+                    .lock()
+                    .map_err(|_| LuaError::runtime("cookie.set 无法获取会话锁"))?;
+                jar.insert(
+                    name.trim().to_string(),
+                    CookieEntry {
+                        value,
+                        attrs: parse_cookie_attrs(attrs)?,
+                    },
+                );
+                Ok(())
+            },
+        )
+        .map_err(map_lua_error)?;
+
+    cookie_table.set("get", get_fn).map_err(map_lua_error)?;
+    cookie_table.set("set", set_fn).map_err(map_lua_error)?;
+
+    let globals = lua.globals();
+    globals.set("cookie", cookie_table).map_err(map_lua_error)?;
+    Ok(())
+}
+
+fn register_secret_api(
+    lua: &Lua,
+    secret_store: Arc<dyn SecretStore>,
+    secret_scope: String,
+) -> PluginRuntimeResult<()> {
+    let secret_table = lua.create_table().map_err(map_lua_error)?;
+
+    let get_store = Arc::clone(&secret_store);
+    let get_scope = secret_scope.clone();
+    let get_fn = lua
+        .create_function(move |_, key: String| {
+            let secret = get_store
+                .get(&get_scope, key.trim())
+                .map_err(|error| map_secret_error("secret.get", error))?;
+            Ok(secret.as_str().to_string())
+        })
+        .map_err(map_lua_error)?;
+
+    let set_store = Arc::clone(&secret_store);
+    let set_scope = secret_scope;
+    let set_fn = lua
+        .create_function(move |_, (key, value): (String, String)| {
+            set_store
+                .set(&set_scope, key.trim(), value.as_str())
+                .map_err(|error| map_secret_error("secret.set", error))?;
+            Ok(())
+        })
+        .map_err(map_lua_error)?;
+
+    secret_table.set("get", get_fn).map_err(map_lua_error)?;
+    secret_table.set("set", set_fn).map_err(map_lua_error)?;
+
+    let globals = lua.globals();
+    globals.set("secret", secret_table).map_err(map_lua_error)?;
+    Ok(())
+}
+
+fn register_http_api(
+    lua: &Lua,
+    network_profile: &str,
+    cookie_store: Arc<Mutex<HashMap<String, CookieEntry>>>,
+    request_counter: Arc<AtomicUsize>,
+) -> PluginRuntimeResult<()> {
     let transport_profile = NetworkProfileFactory::create(network_profile)
         .map_err(|error| PluginRuntimeError::ScriptRuntime(error.to_string()))?;
-    let request_counter = Arc::new(AtomicUsize::new(0));
     let http_table = lua.create_table().map_err(map_lua_error)?;
 
+    let request_cookie_store = Arc::clone(&cookie_store);
     let request_fn = lua
         .create_function(move |lua, request_table: Table| {
             let next = request_counter
@@ -323,7 +493,11 @@ fn register_http_api(lua: &Lua, network_profile: &str) -> PluginRuntimeResult<()
             }
 
             let request: HttpRequestInput = lua.from_value(LuaValue::Table(request_table))?;
-            let response = execute_http_request(transport_profile.as_ref(), request)?;
+            let response = execute_http_request(
+                transport_profile.as_ref(),
+                request,
+                Arc::clone(&request_cookie_store),
+            )?;
             lua.to_value(&response)
         })
         .map_err(map_lua_error)?;
@@ -340,6 +514,7 @@ fn register_http_api(lua: &Lua, network_profile: &str) -> PluginRuntimeResult<()
 fn execute_http_request(
     transport_profile: &dyn TransportProfile,
     request: HttpRequestInput,
+    cookie_store: Arc<Mutex<HashMap<String, CookieEntry>>>,
 ) -> Result<HttpResponseOutput, LuaError> {
     let url = Url::parse(request.url.trim())
         .map_err(|error| LuaError::runtime(format!("http.request url 非法：{error}")))?;
@@ -360,7 +535,11 @@ fn execute_http_request(
         .unwrap_or("GET")
         .parse::<Method>()
         .map_err(|error| LuaError::runtime(format!("http.request method 非法：{error}")))?;
-    let headers = build_request_headers(transport_profile, request.headers.as_ref())?;
+    let headers = build_request_headers(
+        transport_profile,
+        request.headers.as_ref(),
+        Arc::clone(&cookie_store),
+    )?;
 
     let mut retry_attempt = 0usize;
     loop {
@@ -418,6 +597,7 @@ fn execute_http_request(
         .map_err(|error| LuaError::runtime(format!("http.request 失败：{error}")))?;
 
         let (status, final_url, response_headers, response_body) = response;
+        apply_response_cookies(&response_headers, Arc::clone(&cookie_store))?;
         if !status.is_success() {
             if retry_attempt < transport_profile.max_retries()
                 && transport_profile.is_retryable_status(status)
@@ -449,6 +629,7 @@ fn execute_http_request(
 fn build_request_headers(
     transport_profile: &dyn TransportProfile,
     headers: Option<&std::collections::BTreeMap<String, String>>,
+    cookie_store: Arc<Mutex<HashMap<String, CookieEntry>>>,
 ) -> Result<HeaderMap, LuaError> {
     let mut request_headers = HeaderMap::new();
     for (name, value) in transport_profile.default_headers() {
@@ -477,6 +658,19 @@ fn build_request_headers(
         }
     }
 
+    let has_cookie_header = request_headers.contains_key("cookie");
+    if !has_cookie_header {
+        let cookie_header = compose_cookie_header(cookie_store)?;
+        if !cookie_header.is_empty() {
+            let header_value = HeaderValue::from_str(cookie_header.as_str()).map_err(|error| {
+                LuaError::runtime(format!(
+                    "http.request Cookie Header 值非法（cookie）：{error}"
+                ))
+            })?;
+            request_headers.insert(HeaderName::from_static("cookie"), header_value);
+        }
+    }
+
     Ok(request_headers)
 }
 
@@ -492,6 +686,110 @@ fn flatten_response_headers(headers: &HeaderMap) -> std::collections::BTreeMap<S
         current.push_str(value);
     }
     merged
+}
+
+fn compose_cookie_header(
+    cookie_store: Arc<Mutex<HashMap<String, CookieEntry>>>,
+) -> Result<String, LuaError> {
+    let jar = cookie_store
+        .lock()
+        .map_err(|_| LuaError::runtime("cookie 会话锁已损坏"))?;
+    if jar.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut pairs = jar
+        .iter()
+        .map(|(name, entry)| {
+            let _attrs = entry.attrs.len();
+            format!("{name}={}", entry.value)
+        })
+        .collect::<Vec<_>>();
+    pairs.sort();
+    Ok(pairs.join("; "))
+}
+
+fn apply_response_cookies(
+    headers: &HeaderMap,
+    cookie_store: Arc<Mutex<HashMap<String, CookieEntry>>>,
+) -> Result<(), LuaError> {
+    let mut jar = cookie_store
+        .lock()
+        .map_err(|_| LuaError::runtime("cookie 会话锁已损坏"))?;
+    for value in &headers.get_all("set-cookie") {
+        let raw = match value.to_str() {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        if let Some((name, cookie)) = parse_set_cookie_line(raw) {
+            jar.insert(name, cookie);
+        }
+    }
+    Ok(())
+}
+
+fn parse_set_cookie_line(raw: &str) -> Option<(String, CookieEntry)> {
+    let mut segments = raw.split(';');
+    let name_value = segments.next()?.trim();
+    let (name, value) = name_value.split_once('=')?;
+    if name.trim().is_empty() {
+        return None;
+    }
+
+    let mut attrs = std::collections::BTreeMap::new();
+    for segment in segments {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        if let Some((attr_name, attr_value)) = segment.split_once('=') {
+            attrs.insert(attr_name.trim().to_string(), attr_value.trim().to_string());
+        } else {
+            attrs.insert(segment.to_string(), "true".to_string());
+        }
+    }
+
+    Some((
+        name.trim().to_string(),
+        CookieEntry {
+            value: value.trim().to_string(),
+            attrs,
+        },
+    ))
+}
+
+fn parse_cookie_attrs(
+    attrs: Option<Table>,
+) -> Result<std::collections::BTreeMap<String, String>, LuaError> {
+    let mut parsed = std::collections::BTreeMap::new();
+    let Some(attrs) = attrs else {
+        return Ok(parsed);
+    };
+
+    for pair in attrs.pairs::<LuaValue, LuaValue>() {
+        let (raw_key, raw_value) = pair?;
+        let key = lua_value_to_string(raw_key)
+            .ok_or_else(|| LuaError::runtime("cookie.set attrs 键必须是 string/number/boolean"))?;
+        let value = lua_value_to_string(raw_value)
+            .ok_or_else(|| LuaError::runtime("cookie.set attrs 值必须是 string/number/boolean"))?;
+        parsed.insert(key, value);
+    }
+
+    Ok(parsed)
+}
+
+fn lua_value_to_string(value: LuaValue) -> Option<String> {
+    match value {
+        LuaValue::String(raw) => Some(raw.to_string_lossy().to_string()),
+        LuaValue::Boolean(value) => Some(value.to_string()),
+        LuaValue::Integer(value) => Some(value.to_string()),
+        LuaValue::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_html_text(input: String) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn ensure_allowed_target(url: &Url) -> Result<(), LuaError> {
@@ -635,6 +933,10 @@ fn map_lua_error(error: LuaError) -> PluginRuntimeError {
     PluginRuntimeError::ScriptRuntime(error.to_string())
 }
 
+fn map_secret_error(action: &str, error: app_secrets::SecretError) -> LuaError {
+    LuaError::runtime(format!("{action} 失败（{}）：{error}", error.code()))
+}
+
 fn runtime_message_contains(error: &LuaError, marker: &str) -> bool {
     match error {
         LuaError::RuntimeError(message) => message.contains(marker),
@@ -659,8 +961,10 @@ fn memory_error_message(error: &LuaError) -> Option<&str> {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    use app_secrets::{MemorySecretStore, SecretStore};
     use serde_json::json;
 
     use super::{LuaSandbox, LuaSandboxConfig};
@@ -828,6 +1132,91 @@ mod tests {
         assert!(
             now.contains('T') && now.ends_with('Z'),
             "time.now 应返回 UTC RFC3339 时间字符串"
+        );
+        cleanup_script(&script_path);
+    }
+
+    #[test]
+    fn exposes_html_and_cookie_apis() {
+        let script_path = write_temp_script(
+            "html-cookie-apis",
+            r#"
+                function run()
+                    cookie.set("session", "token-1", { Path = "/", HttpOnly = true })
+                    local html_texts = html.query("<ul><li> Alpha </li><li>Beta</li></ul>", "li")
+                    return {
+                        cookie_value = cookie.get("session"),
+                        list_count = #html_texts,
+                        first_item = html_texts[1],
+                        second_item = html_texts[2]
+                    }
+                end
+            "#,
+        );
+        let sandbox = LuaSandbox::new().expect("沙箱初始化应成功");
+        let result = sandbox
+            .exec_file(&script_path, "run", &[])
+            .expect("html/cookie API 应可调用");
+
+        assert_eq!(result["cookie_value"], json!("token-1"));
+        assert_eq!(result["list_count"], json!(2));
+        assert_eq!(result["first_item"], json!("Alpha"));
+        assert_eq!(result["second_item"], json!("Beta"));
+        cleanup_script(&script_path);
+    }
+
+    #[test]
+    fn secret_api_isolation_is_scoped_to_current_plugin() {
+        let shared_secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
+        shared_secret_store
+            .set("plugin:plugin.alpha", "password", "alpha-secret")
+            .expect("预置插件 A 密钥应成功");
+        shared_secret_store
+            .set("plugin:plugin.beta", "password", "beta-secret")
+            .expect("预置插件 B 密钥应成功");
+
+        let script_path = write_temp_script(
+            "secret-namespace",
+            r#"
+                function run()
+                    local current = secret.get("password")
+                    secret.set("session_token", "alpha-token")
+                    local saved = secret.get("session_token")
+                    local cross_scope = pcall(function()
+                        return secret.get("plugin.beta.password")
+                    end)
+                    return {
+                        current = current,
+                        saved = saved,
+                        cross_scope = cross_scope
+                    }
+                end
+            "#,
+        );
+
+        let config = LuaSandboxConfig::default()
+            .with_plugin_id("plugin.alpha")
+            .with_secret_store(Arc::clone(&shared_secret_store));
+        let sandbox = LuaSandbox::new_with_config(config).expect("沙箱初始化应成功");
+        let result = sandbox
+            .exec_file(&script_path, "run", &[])
+            .expect("secret API 应可调用");
+
+        assert_eq!(result["current"], json!("alpha-secret"));
+        assert_eq!(result["saved"], json!("alpha-token"));
+        assert_eq!(result["cross_scope"], json!(false));
+        let plugin_a_saved = shared_secret_store
+            .get("plugin:plugin.alpha", "session_token")
+            .expect("插件 A 新密钥应存在");
+        assert_eq!(plugin_a_saved.as_str(), "alpha-token");
+        let plugin_b_secret = shared_secret_store
+            .get("plugin:plugin.beta", "password")
+            .expect("插件 B 密钥应保持不变");
+        assert_eq!(plugin_b_secret.as_str(), "beta-secret");
+        let plugin_b_token = shared_secret_store.get("plugin:plugin.beta", "session_token");
+        assert!(
+            plugin_b_token.is_err(),
+            "插件 A 写入不应污染插件 B 命名空间"
         );
         cleanup_script(&script_path);
     }

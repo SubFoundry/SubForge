@@ -8,10 +8,12 @@ publish.workspace = true
 
 [dependencies]
 app-common = { path = "../app-common" }
+app-secrets = { path = "../app-secrets" }
 app-transport = { path = "../app-transport" }
 base64.workspace = true
 mlua = { version = "^0.11", features = ["lua54", "vendored", "serialize", "send"] }
 reqwest.workspace = true
+scraper = "^0.24"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
