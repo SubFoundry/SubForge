@@ -1,0 +1,10 @@
+{
+  "name": "subforge-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.27.0",
+  "scripts": {
+    "desktop:dev": "pnpm --filter @subforge/desktop dev",
+    "desktop:build": "pnpm --filter @subforge/desktop build",
+    "desktop:tauri:dev": "pnpm --filter @subforge/desktop tauri dev"
+  }
+}

@@ -1,0 +1,35 @@
+[workspace]
+members = [
+  "apps/core",
+  "apps/desktop/src-tauri",
+  "crates/app-common",
+  "crates/app-core",
+  "crates/app-storage",
+  "crates/app-secrets",
+  "crates/app-plugin-runtime",
+  "crates/app-transport",
+  "crates/app-aggregator",
+  "crates/app-transform",
+  "crates/app-http-server",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+publish = false
+
+[workspace.dependencies]
+anyhow = "^1.0"
+axum = "^0.8"
+base64 = "^0.22"
+clap = { version = "^4.6", features = ["derive"] }
+fs2 = "^0.4"
+rand = "^0.9"
+reqwest = { version = "^0.13", features = ["json"] }
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+thiserror = "^2.0"
+tokio = { version = "^1.50", features = ["macros", "rt-multi-thread", "signal", "net"] }
