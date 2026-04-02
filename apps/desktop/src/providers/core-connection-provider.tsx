@@ -18,7 +18,8 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
   const setError = useCoreUiStore((state) => state.setError);
   const setHeartbeatAt = useCoreUiStore((state) => state.setHeartbeatAt);
   const setEventStreamActive = useCoreUiStore((state) => state.setEventStreamActive);
-  const setLastEvent = useCoreUiStore((state) => state.setLastEvent);
+  const pushEvent = useCoreUiStore((state) => state.pushEvent);
+  const setLastRefreshAt = useCoreUiStore((state) => state.setLastRefreshAt);
   const setTheme = useCoreUiStore((state) => state.setTheme);
   const theme = useCoreUiStore((state) => state.theme);
   const addToast = useCoreUiStore((state) => state.addToast);
@@ -167,8 +168,17 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
         return;
       }
       if (payload.kind === "event" && payload.payload) {
-        setLastEvent(payload.payload);
+        pushEvent(payload.payload);
+
         if (
+          payload.payload.event === "refresh:complete" ||
+          payload.payload.event === "profile:refreshed"
+        ) {
+          setLastRefreshAt(payload.payload.timestamp ?? new Date().toISOString());
+        }
+
+        if (
+          payload.payload.event === "refresh:failed" ||
           payload.payload.event === "refresh:error" ||
           payload.payload.event === "source:degraded"
         ) {
@@ -189,7 +199,7 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
         unlisten();
       }
     };
-  }, [addToast, setError, setEventStreamActive, setLastEvent]);
+  }, [addToast, pushEvent, setError, setEventStreamActive, setLastRefreshAt]);
 
   return children;
 }

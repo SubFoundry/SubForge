@@ -7,7 +7,8 @@ use std::time::Duration;
 use app_common::{AppSetting, Plugin, Profile, ProxyNode, SourceInstance};
 use app_core::{Engine, PluginInstallService, SourceService};
 use app_storage::{
-    NodeCacheRepository, PluginRepository, ProfileRepository, SettingsRepository, SourceRepository,
+    NodeCacheRepository, PluginRepository, ProfileRepository, RefreshJobRepository,
+    SettingsRepository, SourceRepository,
 };
 use axum::Json;
 use axum::extract::{Multipart, Path as AxumPath, Query, State};
@@ -47,7 +48,9 @@ pub(crate) use profiles::{
     get_profile_clash_handler, get_profile_raw_handler, get_profile_singbox_handler,
     list_profiles_handler, refresh_profile_handler, update_profile_handler,
 };
-pub(crate) use settings::{get_system_settings_handler, update_system_settings_handler};
+pub(crate) use settings::{
+    get_system_settings_handler, get_system_status_handler, update_system_settings_handler,
+};
 pub(crate) use sources::{
     create_source_handler, delete_source_handler, list_sources_handler, refresh_source_handler,
     update_source_handler,
@@ -56,6 +59,13 @@ pub(crate) use sources::{
 #[derive(Debug, Serialize)]
 pub(crate) struct SettingsResponse {
     pub(crate) settings: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SystemStatusResponse {
+    pub(crate) active_sources: usize,
+    pub(crate) total_nodes: usize,
+    pub(crate) last_refresh_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

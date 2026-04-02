@@ -92,6 +92,36 @@ async fn e2e_import_source_refresh_and_raw_profile_output() {
         .expect("创建 Profile 后应自动生成 export_token")
         .token;
 
+    let status_before_refresh = app
+        .clone()
+        .oneshot(admin_request(
+            Method::GET,
+            "/api/system/status",
+            Body::empty(),
+        ))
+        .await
+        .expect("读取系统状态失败");
+    assert_eq!(status_before_refresh.status(), StatusCode::OK);
+    let status_before_payload = read_json(status_before_refresh).await;
+    assert_eq!(
+        status_before_payload
+            .get("active_sources")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        status_before_payload
+            .get("total_nodes")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        status_before_payload
+            .get("last_refresh_at")
+            .and_then(Value::as_str),
+        None
+    );
+
     let refresh_response = app
         .clone()
         .oneshot(admin_request(
@@ -123,6 +153,36 @@ async fn e2e_import_source_refresh_and_raw_profile_output() {
     let event = wait_refresh_complete_event(&mut event_receiver, &source_id).await;
     assert_eq!(event.event, "refresh:complete");
     assert_eq!(event.source_id.as_deref(), Some(source_id.as_str()));
+
+    let status_after_refresh = app
+        .clone()
+        .oneshot(admin_request(
+            Method::GET,
+            "/api/system/status",
+            Body::empty(),
+        ))
+        .await
+        .expect("刷新后读取系统状态失败");
+    assert_eq!(status_after_refresh.status(), StatusCode::OK);
+    let status_after_payload = read_json(status_after_refresh).await;
+    assert_eq!(
+        status_after_payload
+            .get("active_sources")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        status_after_payload
+            .get("total_nodes")
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    assert!(
+        status_after_payload
+            .get("last_refresh_at")
+            .and_then(Value::as_str)
+            .is_some()
+    );
 
     let raw_response = app
         .clone()

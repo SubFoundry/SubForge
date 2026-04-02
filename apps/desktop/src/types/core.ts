@@ -34,3 +34,37 @@ export type CoreBridgeEvent = {
 export type SettingsResponse = {
   settings: Record<string, string>;
 };
+
+export type SourceRecord = {
+  id: string;
+  plugin_id: string;
+  name: string;
+  status: string;
+  state_json?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SourceListResponse = {
+  sources: Array<{
+    source: SourceRecord;
+    config: Record<string, unknown>;
+  }>;
+};
+
+export type RefreshSourceResponse = {
+  source_id: string;
+  node_count: number;
+};
+
+export type SystemStatusResponse = {
+  activeSources: number;
+  totalNodes: number;
+  lastRefreshAt: string | null;
+};
+
+export type RefreshAllSourcesResult = {
+  total: number;
+  succeeded: string[];
+  failed: Array<{ sourceId: string; reason: string }>;
+};
