@@ -23,6 +23,7 @@ pub struct SourceRefreshResult {
     pub refresh_job_id: String,
     pub source_id: String,
     pub node_count: usize,
+    pub subscription_userinfo: Option<String>,
 }
 
 impl<'a> Engine<'a> {
@@ -86,27 +87,30 @@ impl<'a> Engine<'a> {
                     &loaded_plugin.manifest.network_profile,
                 )?;
                 fetcher
-                    .fetch_and_cache(source_id, &url, user_agent.as_deref())
+                    .fetch_and_cache_with_metadata(source_id, &url, user_agent.as_deref())
                     .await
+                    .map(|value| (value.nodes, value.subscription_userinfo))
             }
             PluginType::Script => {
                 let script_executor = ScriptExecutor::new(self.db, Arc::clone(&self.secret_store));
                 script_executor
                     .execute(&source, &loaded_plugin, trigger_type)
                     .await
-                    .map(|output| output.nodes)
+                    .map(|value| (value.nodes, value.subscription_userinfo))
             }
         };
         match result {
-            Ok(nodes) => {
-                let node_count = i64::try_from(nodes.len())
+            Ok((nodes, subscription_userinfo)) => {
+                let node_count_usize = nodes.len();
+                let node_count = i64::try_from(node_count_usize)
                     .map_err(|_| CoreError::ConfigInvalid("节点数量超过 i64 上限".to_string()))?;
                 let finished_at = now_rfc3339()?;
                 refresh_repository.mark_success(&refresh_job_id, &finished_at, node_count)?;
                 Ok(SourceRefreshResult {
                     refresh_job_id,
                     source_id: source_id.to_string(),
-                    node_count: nodes.len(),
+                    node_count: node_count_usize,
+                    subscription_userinfo,
                 })
             }
             Err(error) => {

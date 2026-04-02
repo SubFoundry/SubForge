@@ -9,7 +9,8 @@ use app_secrets::MemorySecretStore;
 use app_storage::{ExportTokenRepository, RefreshJobRepository};
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, header::CONTENT_TYPE, header::HOST};
+use axum::http::header::{CONTENT_TYPE, HOST};
+use axum::http::{HeaderMap, HeaderValue, Method, Request};
 use axum::routing::get;
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -157,11 +158,27 @@ pub(super) async fn start_fixture_server(
     body: String,
     content_type: &'static str,
 ) -> (String, JoinHandle<()>) {
+    start_fixture_server_with_userinfo(body, content_type, None).await
+}
+
+pub(super) async fn start_fixture_server_with_userinfo(
+    body: String,
+    content_type: &'static str,
+    subscription_userinfo: Option<&'static str>,
+) -> (String, JoinHandle<()>) {
     let app = Router::new().route(
         "/sub",
         get(move || {
             let body = body.clone();
-            async move { ([(axum::http::header::CONTENT_TYPE, content_type)], body) }
+            let subscription_userinfo = subscription_userinfo;
+            async move {
+                let mut headers = HeaderMap::new();
+                headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+                if let Some(value) = subscription_userinfo {
+                    headers.insert("subscription-userinfo", HeaderValue::from_static(value));
+                }
+                (headers, body)
+            }
         }),
     );
     let listener = TcpListener::bind("127.0.0.1:0")

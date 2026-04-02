@@ -14,6 +14,7 @@ use crate::{CoreError, CoreResult, SourceWithConfig, StaticFetcher};
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ScriptExecutionResult {
     pub nodes: Vec<ProxyNode>,
+    pub subscription_userinfo: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -139,18 +140,23 @@ impl<'a> ScriptExecutor<'a> {
         persist_state_if_changed(self.db, &mut source_row, &state, &fetch_result.state_update)?;
 
         let user_agent = source.config.get("user_agent").and_then(Value::as_str);
-        let nodes = match fetch_result.subscription {
+        let (nodes, subscription_userinfo) = match fetch_result.subscription {
             ScriptSubscription::Url(url) => {
-                fetcher
-                    .fetch_and_cache(&source.source.id, &url, user_agent)
-                    .await?
+                let result = fetcher
+                    .fetch_and_cache_with_metadata(&source.source.id, &url, user_agent)
+                    .await?;
+                (result.nodes, result.subscription_userinfo)
             }
             ScriptSubscription::Content(content) => {
-                fetcher.parse_and_cache_content(&source.source.id, &content)?
+                let nodes = fetcher.parse_and_cache_content(&source.source.id, &content)?;
+                (nodes, None)
             }
         };
 
-        Ok(ScriptExecutionResult { nodes })
+        Ok(ScriptExecutionResult {
+            nodes,
+            subscription_userinfo,
+        })
     }
 }
 

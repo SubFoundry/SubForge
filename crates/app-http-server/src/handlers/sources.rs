@@ -90,6 +90,9 @@ pub(crate) async fn update_source_handler(
         format!("来源更新成功：{id}"),
         Some(id.clone()),
     );
+    let profile_ids = list_profile_ids_by_source(state.database.as_ref(), &id)
+        .map_err(storage_error_to_response)?;
+    state.profile_cache.invalidate_many(&profile_ids);
     Ok((
         StatusCode::OK,
         Json(SourceResponse {
@@ -102,12 +105,16 @@ pub(crate) async fn delete_source_handler(
     State(state): State<ServerContext>,
     AxumPath(id): AxumPath<String>,
 ) -> ApiResult<Value> {
+    let related_profiles = list_profile_ids_by_source(state.database.as_ref(), &id)
+        .map_err(storage_error_to_response)?;
     let service = SourceService::new(
         state.database.as_ref(),
         &state.plugins_dir,
         state.secret_store.as_ref(),
     );
     service.delete_source(&id).map_err(core_error_to_response)?;
+    state.profile_cache.invalidate_many(&related_profiles);
+    state.source_userinfo_cache.set(&id, None);
     emit_event(
         &state,
         "source:deleted",
@@ -130,6 +137,12 @@ pub(crate) async fn refresh_source_handler(
 
     match result {
         Ok(refresh_result) => {
+            state
+                .source_userinfo_cache
+                .set(&id, refresh_result.subscription_userinfo.clone());
+            let profile_ids = list_profile_ids_by_source(state.database.as_ref(), &id)
+                .map_err(storage_error_to_response)?;
+            state.profile_cache.invalidate_many(&profile_ids);
             emit_event(
                 &state,
                 "refresh:complete",

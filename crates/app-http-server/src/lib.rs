@@ -15,10 +15,11 @@ use axum::routing::{delete, get, post, put};
 
 use handlers::{
     create_profile_handler, create_source_handler, delete_plugin_handler, delete_profile_handler,
-    delete_source_handler, events_handler, get_profile_raw_handler, get_system_settings_handler,
+    delete_source_handler, events_handler, get_profile_base64_handler, get_profile_clash_handler,
+    get_profile_raw_handler, get_profile_singbox_handler, get_system_settings_handler,
     health_handler, import_plugin_handler, list_plugins_handler, list_profiles_handler,
-    list_sources_handler, refresh_source_handler, update_profile_handler, update_source_handler,
-    update_system_settings_handler,
+    list_sources_handler, refresh_profile_handler, refresh_source_handler, update_profile_handler,
+    update_source_handler, update_system_settings_handler,
 };
 use middleware::{
     admin_auth_middleware, cors_reject_middleware, host_validation_middleware,
@@ -55,6 +56,13 @@ pub fn build_router(state: ServerContext) -> Router {
             "/api/profiles/{id}",
             put(update_profile_handler).delete(delete_profile_handler),
         )
+        .route("/api/profiles/{id}/refresh", post(refresh_profile_handler))
+        .route("/api/profiles/{id}/clash", get(get_profile_clash_handler))
+        .route(
+            "/api/profiles/{id}/sing-box",
+            get(get_profile_singbox_handler),
+        )
+        .route("/api/profiles/{id}/base64", get(get_profile_base64_handler))
         .route("/api/profiles/{id}/raw", get(get_profile_raw_handler))
         .route("/api/events", get(events_handler))
         .layer(DefaultBodyLimit::max(MAX_PLUGIN_UPLOAD_BYTES))

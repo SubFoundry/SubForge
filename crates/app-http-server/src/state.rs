@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use app_common::ErrorResponse;
+use app_common::{ErrorResponse, Profile, ProxyNode};
 use app_secrets::SecretStore;
 use app_storage::Database;
 use axum::Json;
@@ -19,6 +19,7 @@ pub(crate) const AUTH_FAILURE_THRESHOLD: u32 = 5;
 pub(crate) const AUTH_FAILURE_COOLDOWN_SECONDS: u64 = 60;
 pub(crate) const MANAGEMENT_RATE_LIMIT_PER_SECOND: u32 = 30;
 pub(crate) const SUBSCRIPTION_RATE_LIMIT_PER_SECOND: u32 = 10;
+pub(crate) const PROFILE_CACHE_TTL_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiEvent {
@@ -38,6 +39,8 @@ pub struct ServerContext {
     pub(crate) event_sender: broadcast::Sender<ApiEvent>,
     pub(crate) rate_limiter: Arc<RateLimiter>,
     pub(crate) auth_failures: Arc<AuthFailures>,
+    pub(crate) profile_cache: Arc<ProfileCache>,
+    pub(crate) source_userinfo_cache: Arc<SourceUserinfoCache>,
 }
 
 impl ServerContext {
@@ -58,7 +61,100 @@ impl ServerContext {
             event_sender,
             rate_limiter: Arc::new(RateLimiter::default()),
             auth_failures: Arc::new(AuthFailures::default()),
+            profile_cache: Arc::new(ProfileCache::default()),
+            source_userinfo_cache: Arc::new(SourceUserinfoCache::default()),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ProfileCacheEntry {
+    pub(crate) profile: Profile,
+    pub(crate) source_ids: Vec<String>,
+    pub(crate) nodes: Vec<ProxyNode>,
+    pub(crate) generated_at: String,
+    pub(crate) subscription_userinfo: Option<String>,
+    cached_at: Instant,
+}
+
+impl ProfileCacheEntry {
+    pub(crate) fn with_cached_at(
+        profile: Profile,
+        source_ids: Vec<String>,
+        nodes: Vec<ProxyNode>,
+        generated_at: String,
+        subscription_userinfo: Option<String>,
+    ) -> Self {
+        Self {
+            profile,
+            source_ids,
+            nodes,
+            generated_at,
+            subscription_userinfo,
+            cached_at: Instant::now(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ProfileCache {
+    inner: Mutex<HashMap<String, ProfileCacheEntry>>,
+}
+
+impl ProfileCache {
+    pub(crate) fn get_fresh(&self, profile_id: &str, ttl: Duration) -> Option<ProfileCacheEntry> {
+        let mut inner = self.inner.lock().ok()?;
+        let now = Instant::now();
+        let Some(entry) = inner.get(profile_id).cloned() else {
+            return None;
+        };
+        if now.duration_since(entry.cached_at) <= ttl {
+            Some(entry)
+        } else {
+            inner.remove(profile_id);
+            None
+        }
+    }
+
+    pub(crate) fn insert(&self, profile_id: &str, entry: ProfileCacheEntry) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.insert(profile_id.to_string(), entry);
+        }
+    }
+
+    pub(crate) fn invalidate(&self, profile_id: &str) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.remove(profile_id);
+        }
+    }
+
+    pub(crate) fn invalidate_many(&self, profile_ids: &[String]) {
+        if let Ok(mut inner) = self.inner.lock() {
+            for profile_id in profile_ids {
+                inner.remove(profile_id);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SourceUserinfoCache {
+    inner: Mutex<HashMap<String, String>>,
+}
+
+impl SourceUserinfoCache {
+    pub(crate) fn set(&self, source_id: &str, userinfo: Option<String>) {
+        if let Ok(mut inner) = self.inner.lock() {
+            if let Some(value) = userinfo {
+                inner.insert(source_id.to_string(), value);
+            } else {
+                inner.remove(source_id);
+            }
+        }
+    }
+
+    pub(crate) fn get(&self, source_id: &str) -> Option<String> {
+        self.inner.lock().ok()?.get(source_id).cloned()
     }
 }
 

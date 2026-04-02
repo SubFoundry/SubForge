@@ -184,11 +184,14 @@ dependencies = [
 name = "app-http-server"
 version = "0.1.0"
 dependencies = [
+ "app-aggregator",
  "app-common",
  "app-core",
  "app-secrets",
  "app-storage",
+ "app-transform",
  "axum",
+ "base64 0.22.1",
  "rusqlite",
  "serde",
  "serde_json",

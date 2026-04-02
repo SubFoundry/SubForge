@@ -9,6 +9,13 @@ use crate::utils::now_rfc3339;
 use crate::{CoreError, CoreResult, SubscriptionParser, UriListParser};
 
 const MAX_SUBSCRIPTION_BYTES: usize = 10 * 1024 * 1024;
+const SUBSCRIPTION_USERINFO_HEADER: &str = "subscription-userinfo";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FetchAndCacheResult {
+    pub nodes: Vec<ProxyNode>,
+    pub subscription_userinfo: Option<String>,
+}
 
 #[derive(Debug)]
 pub struct StaticFetcher<'a, P: SubscriptionParser = UriListParser> {
@@ -58,6 +65,18 @@ where
         subscription_url: &str,
         user_agent: Option<&str>,
     ) -> CoreResult<Vec<ProxyNode>> {
+        let result = self
+            .fetch_and_cache_with_metadata(source_instance_id, subscription_url, user_agent)
+            .await?;
+        Ok(result.nodes)
+    }
+
+    pub async fn fetch_and_cache_with_metadata(
+        &self,
+        source_instance_id: &str,
+        subscription_url: &str,
+        user_agent: Option<&str>,
+    ) -> CoreResult<FetchAndCacheResult> {
         let subscription_url = subscription_url.trim();
         if subscription_url.is_empty() {
             return Err(CoreError::ConfigInvalid("订阅 URL 不能为空".to_string()));
@@ -154,6 +173,14 @@ where
             }
         }
 
+        let subscription_userinfo = response
+            .headers()
+            .get(SUBSCRIPTION_USERINFO_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
         let bytes = response
             .bytes()
             .await
@@ -172,7 +199,10 @@ where
         let nodes = self.parser.parse(source_instance_id, payload)?;
         self.cache_nodes(source_instance_id, &nodes)?;
 
-        Ok(nodes)
+        Ok(FetchAndCacheResult {
+            nodes,
+            subscription_userinfo,
+        })
     }
 
     pub fn parse_and_cache_content(

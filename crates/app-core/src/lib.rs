@@ -11,7 +11,7 @@ mod utils;
 
 pub use engine::{Engine, SourceRefreshResult};
 pub use error::{CoreError, CoreResult};
-pub use fetcher::StaticFetcher;
+pub use fetcher::{FetchAndCacheResult, StaticFetcher};
 pub use parser::{SubscriptionParser, UriListParser};
 pub use plugin_install::PluginInstallService;
 pub use source_service::SourceService;

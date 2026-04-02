@@ -12,8 +12,8 @@ use app_storage::{
 use axum::Json;
 use axum::extract::{Multipart, Path as AxumPath, Query, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -23,10 +23,10 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::ApiEvent;
 use crate::helpers::{
     config_error_response, core_error_to_response, current_timestamp_rfc3339, emit_event,
-    error_response, extract_zip_to_dir, internal_error_response, list_profile_source_ids,
-    load_plugin_by_route_id, map_settings, not_found_error_response, replace_profile_sources,
-    source_with_config_to_dto, storage_error_to_response, validate_source_ids_exist,
-    validate_zip_safety,
+    error_response, extract_zip_to_dir, internal_error_response, list_profile_ids_by_source,
+    list_profile_source_ids, load_plugin_by_route_id, map_settings, not_found_error_response,
+    replace_profile_sources, source_with_config_to_dto, storage_error_to_response,
+    validate_source_ids_exist, validate_zip_safety,
 };
 use crate::state::{
     APP_VERSION, ApiResult, HealthResponse, MAX_PLUGIN_UPLOAD_BYTES, ServerContext,
@@ -43,8 +43,9 @@ pub(crate) use events::events_handler;
 pub(crate) use health::health_handler;
 pub(crate) use plugins::{delete_plugin_handler, import_plugin_handler, list_plugins_handler};
 pub(crate) use profiles::{
-    create_profile_handler, delete_profile_handler, get_profile_raw_handler, list_profiles_handler,
-    update_profile_handler,
+    create_profile_handler, delete_profile_handler, get_profile_base64_handler,
+    get_profile_clash_handler, get_profile_raw_handler, get_profile_singbox_handler,
+    list_profiles_handler, refresh_profile_handler, update_profile_handler,
 };
 pub(crate) use settings::{get_system_settings_handler, update_system_settings_handler};
 pub(crate) use sources::{
@@ -105,6 +106,13 @@ pub(crate) struct RefreshSourceResponse {
     pub(crate) node_count: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct RefreshProfileResponse {
+    pub(crate) profile_id: String,
+    pub(crate) refreshed_sources: usize,
+    pub(crate) node_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ProfileDto {
     pub(crate) profile: Profile,
@@ -154,3 +162,5 @@ pub(crate) struct ProfileRawResponse {
     pub(crate) generated_at: String,
     pub(crate) nodes: Vec<ProxyNode>,
 }
+
+pub(crate) type ApiResponseResult = Result<Response, (StatusCode, Json<app_common::ErrorResponse>)>;

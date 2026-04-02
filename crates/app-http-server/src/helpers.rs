@@ -154,6 +154,26 @@ pub(crate) fn list_profile_source_ids(
     })
 }
 
+pub(crate) fn list_profile_ids_by_source(
+    db: &Database,
+    source_id: &str,
+) -> Result<Vec<String>, StorageError> {
+    db.with_connection(|connection| {
+        let mut statement = connection.prepare(
+            "SELECT profile_id
+             FROM profile_sources
+             WHERE source_instance_id = ?1
+             ORDER BY profile_id",
+        )?;
+        let rows = statement.query_map([source_id], |row| row.get::<_, String>(0))?;
+        let mut profile_ids = Vec::new();
+        for row in rows {
+            profile_ids.push(row?);
+        }
+        Ok(profile_ids)
+    })
+}
+
 pub(crate) fn is_valid_export_token(
     db: &Database,
     profile_id: &str,
