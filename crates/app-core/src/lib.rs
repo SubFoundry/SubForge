@@ -13,10 +13,10 @@ use app_common::{
 use app_plugin_runtime::{LoadedPlugin, PluginLoader, PluginRuntimeError};
 use app_secrets::{SecretError, SecretStore};
 use app_storage::{
-    Database, NodeCacheRepository, PluginRepository, SourceConfigRepository, SourceRepository,
-    StorageError,
+    Database, ExportToken, ExportTokenRepository, NodeCacheRepository, PluginRepository,
+    RefreshJob, RefreshJobRepository, SourceConfigRepository, SourceRepository, StorageError,
 };
-use base64::Engine;
+use base64::Engine as Base64Engine;
 use base64::engine::general_purpose::{
     STANDARD as BASE64_STANDARD, STANDARD_NO_PAD as BASE64_STANDARD_NO_PAD,
     URL_SAFE as BASE64_URL_SAFE, URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
@@ -48,6 +48,8 @@ pub enum CoreError {
     TimeFormat(#[from] time::error::Format),
     #[error("HTTP 客户端初始化失败：{0}")]
     HttpClientBuild(#[from] reqwest::Error),
+    #[error("随机数生成失败：{0}")]
+    Random(#[from] getrandom::Error),
     #[error("插件已安装：{0}")]
     PluginAlreadyInstalled(String),
     #[error("配置校验失败：{0}")]
@@ -76,6 +78,7 @@ impl CoreError {
             | Self::Secret(_)
             | Self::Io(_)
             | Self::TimeFormat(_)
+            | Self::Random(_)
             | Self::HttpClientBuild(_)
             | Self::SubscriptionFetch(_) => "E_INTERNAL",
         }
@@ -93,6 +96,13 @@ pub struct SourceService<'a> {
     db: &'a Database,
     secret_store: &'a dyn SecretStore,
     loader: PluginLoader,
+    plugins_dir: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct Engine<'a> {
+    db: &'a Database,
+    secret_store: &'a dyn SecretStore,
     plugins_dir: PathBuf,
 }
 
@@ -115,6 +125,13 @@ pub struct StaticFetcher<'a, P: SubscriptionParser = UriListParser> {
     db: &'a Database,
     parser: P,
     client: HttpClient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRefreshResult {
+    pub refresh_job_id: String,
+    pub source_id: String,
+    pub node_count: usize,
 }
 
 struct PreparedConfig {
@@ -612,6 +629,112 @@ impl<'a> SourceService<'a> {
     }
 }
 
+impl<'a> Engine<'a> {
+    pub fn new(
+        db: &'a Database,
+        plugins_dir: impl Into<PathBuf>,
+        secret_store: &'a dyn SecretStore,
+    ) -> Self {
+        Self {
+            db,
+            secret_store,
+            plugins_dir: plugins_dir.into(),
+        }
+    }
+
+    pub async fn refresh_source(
+        &self,
+        source_id: &str,
+        trigger_type: &str,
+    ) -> CoreResult<SourceRefreshResult> {
+        let source_service = SourceService::new(self.db, &self.plugins_dir, self.secret_store);
+        let source = source_service
+            .get_source(source_id)?
+            .ok_or_else(|| CoreError::SourceNotFound(source_id.to_string()))?;
+
+        let url = source
+            .config
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CoreError::ConfigInvalid("来源配置缺少 url 字段".to_string()))?
+            .to_string();
+        let user_agent = source
+            .config
+            .get("user_agent")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+
+        let refresh_job_id = format!(
+            "refresh-job-{}",
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        );
+        let refresh_repository = RefreshJobRepository::new(self.db);
+        refresh_repository.insert(&RefreshJob {
+            id: refresh_job_id.clone(),
+            source_instance_id: source_id.to_string(),
+            trigger_type: trigger_type.to_string(),
+            status: "running".to_string(),
+            started_at: Some(now_rfc3339()?),
+            finished_at: None,
+            node_count: None,
+            error_code: None,
+            error_message: None,
+        })?;
+
+        let fetcher = StaticFetcher::new(self.db)?;
+        let result = fetcher
+            .fetch_and_cache(source_id, &url, user_agent.as_deref())
+            .await;
+        match result {
+            Ok(nodes) => {
+                let node_count = i64::try_from(nodes.len())
+                    .map_err(|_| CoreError::ConfigInvalid("节点数量超过 i64 上限".to_string()))?;
+                let finished_at = now_rfc3339()?;
+                refresh_repository.mark_success(&refresh_job_id, &finished_at, node_count)?;
+                Ok(SourceRefreshResult {
+                    refresh_job_id,
+                    source_id: source_id.to_string(),
+                    node_count: nodes.len(),
+                })
+            }
+            Err(error) => {
+                let finished_at = now_rfc3339()?;
+                let error_code = error.code().to_string();
+                let error_message = error.to_string();
+                let _ = refresh_repository.mark_failed(
+                    &refresh_job_id,
+                    &finished_at,
+                    &error_code,
+                    &error_message,
+                );
+                Err(error)
+            }
+        }
+    }
+
+    pub fn ensure_profile_export_token(&self, profile_id: &str) -> CoreResult<String> {
+        let repository = ExportTokenRepository::new(self.db);
+        if let Some(existing) = repository.get_active_token(profile_id)? {
+            return Ok(existing.token);
+        }
+
+        let token = generate_secure_token()?;
+        let created_at = now_rfc3339()?;
+        repository.insert(&ExportToken {
+            id: format!(
+                "export-token-{}",
+                OffsetDateTime::now_utc().unix_timestamp_nanos()
+            ),
+            profile_id: profile_id.to_string(),
+            token: token.clone(),
+            token_type: "primary".to_string(),
+            created_at,
+            expires_at: None,
+        })?;
+        Ok(token)
+    }
+}
+
 impl<'a> PluginInstallService<'a> {
     pub fn new(db: &'a Database, plugins_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -676,6 +799,12 @@ impl<'a> PluginInstallService<'a> {
 
 fn now_rfc3339() -> CoreResult<String> {
     Ok(OffsetDateTime::now_utc().format(&Rfc3339)?)
+}
+
+fn generate_secure_token() -> CoreResult<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)?;
+    Ok(BASE64_URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn plugin_scope(plugin_id: &str) -> String {
@@ -1312,7 +1441,8 @@ mod tests {
     use app_common::ProxyProtocol;
     use app_secrets::{MemorySecretStore, SecretStore};
     use app_storage::{
-        Database, NodeCacheRepository, PluginRepository, SourceConfigRepository, SourceRepository,
+        Database, ExportTokenRepository, NodeCacheRepository, PluginRepository,
+        RefreshJobRepository, SourceConfigRepository, SourceRepository,
     };
     use axum::Router;
     use axum::routing::get;
@@ -1321,7 +1451,7 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use super::{
-        CoreError, PluginInstallService, SourceService, StaticFetcher, SubscriptionParser,
+        CoreError, Engine, PluginInstallService, SourceService, StaticFetcher, SubscriptionParser,
         UriListParser,
     };
 
@@ -1630,6 +1760,91 @@ mod tests {
         assert!(matches!(error, CoreError::SubscriptionFetch(_)));
 
         server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn engine_refresh_source_records_refresh_job_success() {
+        let db = Database::open_in_memory().expect("内存数据库初始化失败");
+        let temp_root = create_temp_dir("engine-refresh");
+        let plugins_dir = temp_root.join("plugins");
+        let install_service = PluginInstallService::new(&db, &plugins_dir);
+        install_service
+            .install_from_dir(builtins_static_plugin_dir())
+            .expect("安装内置插件应成功");
+
+        let secret_store = MemorySecretStore::new();
+        let source_service = SourceService::new(&db, &plugins_dir, &secret_store);
+        let (url, server_task) = start_fixture_server(
+            "/sub",
+            BASE64_SUBSCRIPTION_FIXTURE.trim().to_string(),
+            "text/plain; charset=utf-8",
+        )
+        .await;
+        let mut config = BTreeMap::new();
+        config.insert("url".to_string(), json!(format!("{url}/sub")));
+        let source = source_service
+            .create_source("subforge.builtin.static", "Engine Source", config)
+            .expect("创建来源应成功");
+
+        let engine = Engine::new(&db, &plugins_dir, &secret_store);
+        let refresh_result = engine
+            .refresh_source(&source.source.id, "manual")
+            .await
+            .expect("刷新应成功");
+        assert_eq!(refresh_result.source_id, source.source.id);
+        assert_eq!(refresh_result.node_count, 3);
+
+        let refresh_repository = RefreshJobRepository::new(&db);
+        let jobs = refresh_repository
+            .list_by_source(&source.source.id)
+            .expect("读取 refresh_jobs 失败");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, refresh_result.refresh_job_id);
+        assert_eq!(jobs[0].status, "success");
+        assert_eq!(jobs[0].node_count, Some(3));
+        assert!(jobs[0].error_code.is_none());
+
+        server_task.abort();
+        cleanup_dir(&temp_root);
+    }
+
+    #[test]
+    fn engine_ensure_profile_export_token_is_idempotent() {
+        let db = Database::open_in_memory().expect("内存数据库初始化失败");
+        let temp_root = create_temp_dir("engine-token");
+        let plugins_dir = temp_root.join("plugins");
+        fs::create_dir_all(&plugins_dir).expect("创建插件目录失败");
+        let profile_repository = app_storage::ProfileRepository::new(&db);
+        let profile = app_common::Profile {
+            id: "profile-engine-token".to_string(),
+            name: "Engine Token".to_string(),
+            description: None,
+            created_at: "2026-04-02T07:00:00Z".to_string(),
+            updated_at: "2026-04-02T07:00:00Z".to_string(),
+        };
+        profile_repository
+            .insert(&profile)
+            .expect("写入 profile 失败");
+
+        let secret_store = MemorySecretStore::new();
+        let engine = Engine::new(&db, &plugins_dir, &secret_store);
+        let token_a = engine
+            .ensure_profile_export_token(&profile.id)
+            .expect("首次生成 token 应成功");
+        let token_b = engine
+            .ensure_profile_export_token(&profile.id)
+            .expect("重复生成应返回已有 token");
+        assert_eq!(token_a, token_b);
+        assert_eq!(token_a.len(), 43);
+
+        let token_repository = ExportTokenRepository::new(&db);
+        let stored = token_repository
+            .get_active_token(&profile.id)
+            .expect("读取 active token 失败")
+            .expect("应存在 active token");
+        assert_eq!(stored.token, token_a);
+
+        cleanup_dir(&temp_root);
     }
 
     fn builtins_static_plugin_dir() -> PathBuf {

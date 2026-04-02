@@ -12,6 +12,7 @@ app-plugin-runtime = { path = "../app-plugin-runtime" }
 app-secrets = { path = "../app-secrets" }
 app-storage = { path = "../app-storage" }
 base64.workspace = true
+getrandom.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true

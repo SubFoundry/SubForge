@@ -390,6 +390,29 @@ pub struct NodeCacheEntry {
     pub expires_at: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshJob {
+    pub id: String,
+    pub source_instance_id: String,
+    pub trigger_type: String,
+    pub status: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub node_count: Option<i64>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportToken {
+    pub id: String,
+    pub profile_id: String,
+    pub token: String,
+    pub token_type: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NodeCacheRepository<'a> {
     db: &'a Database,
@@ -474,6 +497,183 @@ impl<'a> NodeCacheRepository<'a> {
                 [source_instance_id],
             )?;
             Ok(affected)
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RefreshJobRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> RefreshJobRepository<'a> {
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    pub fn insert(&self, job: &RefreshJob) -> StorageResult<()> {
+        self.db.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO refresh_jobs
+                 (id, source_instance_id, trigger_type, status, started_at, finished_at, node_count, error_code, error_message)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    job.id,
+                    job.source_instance_id,
+                    job.trigger_type,
+                    job.status,
+                    job.started_at,
+                    job.finished_at,
+                    job.node_count,
+                    job.error_code,
+                    job.error_message
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn mark_success(
+        &self,
+        id: &str,
+        finished_at: &str,
+        node_count: i64,
+    ) -> StorageResult<usize> {
+        self.db.with_connection(|connection| {
+            let affected = connection.execute(
+                "UPDATE refresh_jobs
+                 SET status = ?1,
+                     finished_at = ?2,
+                     node_count = ?3,
+                     error_code = NULL,
+                     error_message = NULL
+                 WHERE id = ?4",
+                params!["success", finished_at, node_count, id],
+            )?;
+            Ok(affected)
+        })
+    }
+
+    pub fn mark_failed(
+        &self,
+        id: &str,
+        finished_at: &str,
+        error_code: &str,
+        error_message: &str,
+    ) -> StorageResult<usize> {
+        self.db.with_connection(|connection| {
+            let affected = connection.execute(
+                "UPDATE refresh_jobs
+                 SET status = ?1,
+                     finished_at = ?2,
+                     node_count = NULL,
+                     error_code = ?3,
+                     error_message = ?4
+                 WHERE id = ?5",
+                params!["failed", finished_at, error_code, error_message, id],
+            )?;
+            Ok(affected)
+        })
+    }
+
+    pub fn get_by_id(&self, id: &str) -> StorageResult<Option<RefreshJob>> {
+        self.db.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT id, source_instance_id, trigger_type, status, started_at, finished_at, node_count, error_code, error_message
+                     FROM refresh_jobs
+                     WHERE id = ?1
+                     LIMIT 1",
+                    [id],
+                    map_refresh_job_row,
+                )
+                .optional()
+                .map_err(StorageError::from)
+        })
+    }
+
+    pub fn list_by_source(&self, source_instance_id: &str) -> StorageResult<Vec<RefreshJob>> {
+        self.db.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, source_instance_id, trigger_type, status, started_at, finished_at, node_count, error_code, error_message
+                 FROM refresh_jobs
+                 WHERE source_instance_id = ?1
+                 ORDER BY started_at, id",
+            )?;
+            let items = statement
+                .query_map([source_instance_id], map_refresh_job_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(items)
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExportTokenRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> ExportTokenRepository<'a> {
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    pub fn insert(&self, token: &ExportToken) -> StorageResult<()> {
+        self.db.with_connection(|connection| {
+            connection.execute(
+                "INSERT INTO export_tokens (id, profile_id, token, token_type, created_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    token.id,
+                    token.profile_id,
+                    token.token,
+                    token.token_type,
+                    token.created_at,
+                    token.expires_at
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn get_active_token(&self, profile_id: &str) -> StorageResult<Option<ExportToken>> {
+        self.db.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT id, profile_id, token, token_type, created_at, expires_at
+                     FROM export_tokens
+                     WHERE profile_id = ?1 AND expires_at IS NULL
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1",
+                    [profile_id],
+                    map_export_token_row,
+                )
+                .optional()
+                .map_err(StorageError::from)
+        })
+    }
+
+    pub fn is_valid_token(
+        &self,
+        profile_id: &str,
+        token: &str,
+        now_rfc3339: &str,
+    ) -> StorageResult<bool> {
+        self.db.with_connection(|connection| {
+            let exists = connection
+                .query_row(
+                    "SELECT 1
+                     FROM export_tokens
+                     WHERE profile_id = ?1
+                       AND token = ?2
+                       AND (expires_at IS NULL OR expires_at > ?3)
+                     LIMIT 1",
+                    params![profile_id, token, now_rfc3339],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            Ok(exists)
         })
     }
 }
@@ -689,6 +889,31 @@ fn map_setting_row(row: &Row<'_>) -> rusqlite::Result<AppSetting> {
     })
 }
 
+fn map_refresh_job_row(row: &Row<'_>) -> rusqlite::Result<RefreshJob> {
+    Ok(RefreshJob {
+        id: row.get("id")?,
+        source_instance_id: row.get("source_instance_id")?,
+        trigger_type: row.get("trigger_type")?,
+        status: row.get("status")?,
+        started_at: row.get("started_at")?,
+        finished_at: row.get("finished_at")?,
+        node_count: row.get("node_count")?,
+        error_code: row.get("error_code")?,
+        error_message: row.get("error_message")?,
+    })
+}
+
+fn map_export_token_row(row: &Row<'_>) -> rusqlite::Result<ExportToken> {
+    Ok(ExportToken {
+        id: row.get("id")?,
+        profile_id: row.get("profile_id")?,
+        token: row.get("token")?,
+        token_type: row.get("token_type")?,
+        created_at: row.get("created_at")?,
+        expires_at: row.get("expires_at")?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -701,9 +926,13 @@ mod tests {
     };
 
     use super::Database;
+    use super::ExportToken;
+    use super::ExportTokenRepository;
     use super::NodeCacheRepository;
     use super::PluginRepository;
     use super::ProfileRepository;
+    use super::RefreshJob;
+    use super::RefreshJobRepository;
     use super::SettingsRepository;
     use super::SourceConfigRepository;
     use super::SourceRepository;
@@ -1061,6 +1290,129 @@ mod tests {
 
         assert_eq!(cache_repository.delete_by_source(&source.id)?, 1);
         assert!(cache_repository.get_by_source(&source.id)?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_job_repository_records_success_and_failure() -> StorageResult<()> {
+        let db = Database::open_in_memory()?;
+        let source_repository = SourceRepository::new(&db);
+        let refresh_repository = RefreshJobRepository::new(&db);
+        let source = sample_source("source-refresh-1", "vendor.example.static");
+        source_repository.insert(&source)?;
+
+        let success_job = RefreshJob {
+            id: "refresh-job-success".to_string(),
+            source_instance_id: source.id.clone(),
+            trigger_type: "manual".to_string(),
+            status: "running".to_string(),
+            started_at: Some("2026-04-02T06:00:00Z".to_string()),
+            finished_at: None,
+            node_count: None,
+            error_code: None,
+            error_message: None,
+        };
+        refresh_repository.insert(&success_job)?;
+        assert_eq!(
+            refresh_repository.mark_success(&success_job.id, "2026-04-02T06:00:10Z", 42)?,
+            1
+        );
+
+        let success_loaded = refresh_repository
+            .get_by_id(&success_job.id)?
+            .expect("成功任务应存在");
+        assert_eq!(success_loaded.status, "success");
+        assert_eq!(success_loaded.node_count, Some(42));
+        assert_eq!(success_loaded.error_code, None);
+        assert_eq!(success_loaded.error_message, None);
+
+        let failed_job = RefreshJob {
+            id: "refresh-job-failed".to_string(),
+            source_instance_id: source.id.clone(),
+            trigger_type: "scheduled".to_string(),
+            status: "running".to_string(),
+            started_at: Some("2026-04-02T06:10:00Z".to_string()),
+            finished_at: None,
+            node_count: None,
+            error_code: None,
+            error_message: None,
+        };
+        refresh_repository.insert(&failed_job)?;
+        assert_eq!(
+            refresh_repository.mark_failed(
+                &failed_job.id,
+                "2026-04-02T06:10:20Z",
+                "E_HTTP_5XX",
+                "upstream 502"
+            )?,
+            1
+        );
+
+        let failed_loaded = refresh_repository
+            .get_by_id(&failed_job.id)?
+            .expect("失败任务应存在");
+        assert_eq!(failed_loaded.status, "failed");
+        assert_eq!(failed_loaded.node_count, None);
+        assert_eq!(failed_loaded.error_code.as_deref(), Some("E_HTTP_5XX"));
+        assert_eq!(failed_loaded.error_message.as_deref(), Some("upstream 502"));
+
+        let by_source = refresh_repository.list_by_source(&source.id)?;
+        assert_eq!(by_source.len(), 2);
+        assert_eq!(by_source[0].id, success_job.id);
+        assert_eq!(by_source[1].id, failed_job.id);
+
+        Ok(())
+    }
+
+    #[test]
+    fn export_token_repository_supports_active_and_expiring_tokens() -> StorageResult<()> {
+        let db = Database::open_in_memory()?;
+        let profile_repository = ProfileRepository::new(&db);
+        let token_repository = ExportTokenRepository::new(&db);
+        let profile = sample_profile("profile-export-token");
+        profile_repository.insert(&profile)?;
+
+        let active = ExportToken {
+            id: "token-active".to_string(),
+            profile_id: profile.id.clone(),
+            token: "token-active-value".to_string(),
+            token_type: "primary".to_string(),
+            created_at: "2026-04-02T06:20:00Z".to_string(),
+            expires_at: None,
+        };
+        token_repository.insert(&active)?;
+
+        let expiring = ExportToken {
+            id: "token-expiring".to_string(),
+            profile_id: profile.id.clone(),
+            token: "token-expiring-value".to_string(),
+            token_type: "grace".to_string(),
+            created_at: "2026-04-02T06:21:00Z".to_string(),
+            expires_at: Some("2026-04-02T06:30:00Z".to_string()),
+        };
+        token_repository.insert(&expiring)?;
+
+        let loaded_active = token_repository
+            .get_active_token(&profile.id)?
+            .expect("应能读取 active token");
+        assert_eq!(loaded_active.token, active.token);
+
+        assert!(token_repository.is_valid_token(
+            &profile.id,
+            &active.token,
+            "2026-04-02T06:22:00Z"
+        )?);
+        assert!(token_repository.is_valid_token(
+            &profile.id,
+            &expiring.token,
+            "2026-04-02T06:22:00Z"
+        )?);
+        assert!(!token_repository.is_valid_token(
+            &profile.id,
+            &expiring.token,
+            "2026-04-02T06:40:00Z"
+        )?);
 
         Ok(())
     }
