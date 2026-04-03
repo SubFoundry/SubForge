@@ -7,6 +7,8 @@ use serde_json::json;
 
 use crate::config::LoadedHeadlessConfig;
 use crate::headless::{apply_headless_configuration, list_profile_source_ids, list_sources};
+#[cfg(unix)]
+use crate::security::admin_token_config_permission_warning;
 
 #[test]
 fn headless_config_resolves_env_secret_and_listen_addr() {
@@ -132,6 +134,52 @@ sources = ["static-a"]
     let profile_sources =
         list_profile_source_ids(&database, &profiles[0].id).expect("读取 Profile 关联来源失败");
     assert_eq!(profile_sources, vec![sources[0].id.clone()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_with_admin_token_warns_when_file_permissions_are_too_open() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_root = create_temp_dir("headless-config-perm-open");
+    let config_path = temp_root.join("subforge.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[server]
+listen = "127.0.0.1:19118"
+admin_token = "demo-token"
+"#,
+    )
+    .expect("写入配置文件失败");
+    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o644))
+        .expect("设置配置文件权限失败");
+
+    let warning = admin_token_config_permission_warning(&config_path, true);
+    assert!(warning.is_some(), "权限宽松时应输出告警");
+}
+
+#[cfg(unix)]
+#[test]
+fn config_with_admin_token_owner_only_permissions_no_warning() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_root = create_temp_dir("headless-config-perm-600");
+    let config_path = temp_root.join("subforge.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[server]
+listen = "127.0.0.1:19118"
+admin_token = "demo-token"
+"#,
+    )
+    .expect("写入配置文件失败");
+    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))
+        .expect("设置配置文件权限失败");
+
+    let warning = admin_token_config_permission_warning(&config_path, true);
+    assert!(warning.is_none(), "0600 权限不应告警");
 }
 
 fn builtin_plugin_dir() -> PathBuf {

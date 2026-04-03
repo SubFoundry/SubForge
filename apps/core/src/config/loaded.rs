@@ -9,6 +9,7 @@ use crate::cli::SecretBackendKind;
 use crate::config::utils::{resolve_path, toml_to_json_value};
 use crate::config::validation::validate_loaded_config;
 use crate::config::{HeadlessConfig, LoadedHeadlessConfig, SecretValueSource, SourceSection};
+use crate::security::admin_token_config_permission_warning;
 
 impl LoadedHeadlessConfig {
     pub(crate) fn from_file(path: &Path) -> Result<Self> {
@@ -34,6 +35,12 @@ impl LoadedHeadlessConfig {
             config: parsed,
         };
         validate_loaded_config(&loaded)?;
+        if let Some(warning) = admin_token_config_permission_warning(
+            &loaded.path,
+            loaded.config.server.admin_token.is_some(),
+        ) {
+            eprintln!("{warning}");
+        }
         Ok(loaded)
     }
 

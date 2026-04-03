@@ -21,6 +21,49 @@ async fn plugins_api_requires_admin_token() {
 }
 
 #[tokio::test]
+async fn health_endpoint_rejects_invalid_host_header() {
+    let app = build_router(build_test_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header(HOST, "evil.com")
+                .body(Body::empty())
+                .expect("创建请求失败"),
+        )
+        .await
+        .expect("请求执行失败");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = read_json(response).await;
+    assert_eq!(
+        body.get("code").and_then(serde_json::Value::as_str),
+        Some("E_AUTH")
+    );
+}
+
+#[tokio::test]
+async fn health_response_does_not_include_cors_allow_origin_header() {
+    let app = build_router(build_test_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header(HOST, "127.0.0.1:18118")
+                .body(Body::empty())
+                .expect("创建请求失败"),
+        )
+        .await
+        .expect("请求执行失败");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn plugins_api_rejects_query_admin_token() {
     let app = build_router(build_test_state());
     let response = app

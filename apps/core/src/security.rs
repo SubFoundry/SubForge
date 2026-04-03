@@ -88,6 +88,39 @@ fn normalize_host(raw: &str) -> String {
     raw.trim().to_ascii_lowercase()
 }
 
+pub(crate) fn admin_token_config_permission_warning(
+    path: &Path,
+    has_admin_token: bool,
+) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = fs::metadata(path).ok()?.permissions().mode() & 0o777;
+        return build_admin_token_config_permission_warning(path, has_admin_token, mode);
+    }
+
+    #[cfg(not(unix))]
+    {
+        build_admin_token_config_permission_warning(path, has_admin_token, 0o600)
+    }
+}
+
+fn build_admin_token_config_permission_warning(
+    path: &Path,
+    has_admin_token: bool,
+    mode: u32,
+) -> Option<String> {
+    if !has_admin_token || (mode & 0o077 == 0) {
+        return None;
+    }
+    Some(format!(
+        "WARNING: 配置文件 {} 包含 server.admin_token 且权限为 {:o}，建议收敛为 600（仅当前用户可读写）。",
+        path.display(),
+        mode
+    ))
+}
+
 pub(crate) fn set_owner_only_file_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -157,4 +190,41 @@ fn run_icacls(target: &str, args: &[&str]) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::build_admin_token_config_permission_warning;
+
+    #[test]
+    fn warns_when_admin_token_exists_and_permissions_are_too_open() {
+        let warning = build_admin_token_config_permission_warning(
+            Path::new("/tmp/subforge.toml"),
+            true,
+            0o644,
+        );
+        assert!(warning.is_some());
+    }
+
+    #[test]
+    fn no_warning_when_permissions_are_owner_only() {
+        let warning = build_admin_token_config_permission_warning(
+            Path::new("/tmp/subforge.toml"),
+            true,
+            0o600,
+        );
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn no_warning_without_admin_token_even_if_permissions_are_open() {
+        let warning = build_admin_token_config_permission_warning(
+            Path::new("/tmp/subforge.toml"),
+            false,
+            0o666,
+        );
+        assert!(warning.is_none());
+    }
 }
