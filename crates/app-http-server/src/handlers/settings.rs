@@ -1,4 +1,8 @@
 use super::*;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use std::fs;
+use std::path::Path;
 
 pub(crate) async fn get_system_settings_handler(
     State(state): State<ServerContext>,
@@ -100,4 +104,79 @@ pub(crate) async fn shutdown_system_handler(
 ) -> ApiResult<ShutdownResponse> {
     let _ = state.shutdown_signal.send(true);
     Ok((StatusCode::OK, Json(ShutdownResponse { accepted: true })))
+}
+
+pub(crate) async fn rotate_admin_token_handler(
+    State(state): State<ServerContext>,
+) -> ApiResult<RotateAdminTokenResponse> {
+    let token = generate_admin_token().map_err(|_| internal_error_response())?;
+    persist_admin_token(state.admin_token_path.as_path(), &token)
+        .map_err(|_| internal_error_response())?;
+    {
+        let mut guard = state
+            .admin_token
+            .write()
+            .map_err(|_| internal_error_response())?;
+        *guard = token.clone();
+    }
+    state.auth_failures.reset();
+    emit_event(
+        &state,
+        "system:admin-token-rotated",
+        "admin token 已轮换".to_string(),
+        None,
+    );
+    Ok((StatusCode::OK, Json(RotateAdminTokenResponse { token })))
+}
+
+fn generate_admin_token() -> Result<String, getrandom::Error> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn persist_admin_token(path: &Path, token: &str) -> std::io::Result<()> {
+    fs::write(path, format!("{token}\n"))?;
+    set_owner_only_file_permissions(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_owner_only_file_permissions(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(windows)]
+fn set_owner_only_file_permissions(path: &Path) -> std::io::Result<()> {
+    use std::process::Command;
+
+    let username = std::env::var("USERNAME")
+        .map_err(|err| std::io::Error::other(format!("读取 USERNAME 失败: {err}")))?;
+    let target = path.to_string_lossy().into_owned();
+    let grant = format!("{username}:(R,W)");
+
+    let inheritance = Command::new("icacls")
+        .arg(&target)
+        .args(["/inheritance:r"])
+        .output()?;
+    if !inheritance.status.success() {
+        return Err(std::io::Error::other(format!(
+            "icacls 关闭继承失败: {}",
+            String::from_utf8_lossy(&inheritance.stderr)
+        )));
+    }
+
+    let grant_output = Command::new("icacls")
+        .arg(&target)
+        .args(["/grant:r", &grant])
+        .output()?;
+    if !grant_output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "icacls 授权失败: {}",
+            String::from_utf8_lossy(&grant_output.stderr)
+        )));
+    }
+
+    Ok(())
 }

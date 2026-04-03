@@ -116,7 +116,12 @@ pub(crate) async fn admin_auth_middleware(
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(parse_bearer_token)
-        .is_some_and(|token| token == state.admin_token.as_str());
+        .is_some_and(|token| {
+            state
+                .admin_token
+                .read()
+                .is_ok_and(|current| token == current.as_str())
+        });
     if admin_ok {
         state.auth_failures.reset();
         return next.run(request).await;

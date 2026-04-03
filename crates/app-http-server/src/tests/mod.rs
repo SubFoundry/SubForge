@@ -26,14 +26,18 @@ mod e2e;
 pub(super) fn build_test_state() -> ServerContext {
     let database = Arc::new(app_storage::Database::open_in_memory().expect("初始化数据库失败"));
     let secret_store = Arc::new(MemorySecretStore::new());
-    let plugins_dir = std::env::temp_dir().join(format!(
+    let data_dir = std::env::temp_dir().join(format!(
         "subforge-http-server-test-{}",
         time::OffsetDateTime::now_utc().unix_timestamp_nanos()
     ));
+    let plugins_dir = data_dir.join("plugins");
     std::fs::create_dir_all(&plugins_dir).expect("创建测试插件目录失败");
+    let admin_token_path = data_dir.join("admin_token");
+    fs::write(&admin_token_path, "test-admin-token\n").expect("初始化测试 admin_token 文件失败");
     let (tx, _rx) = tokio::sync::broadcast::channel::<ApiEvent>(64);
     ServerContext::new(
         "test-admin-token".to_string(),
+        admin_token_path,
         database,
         secret_store,
         plugins_dir,

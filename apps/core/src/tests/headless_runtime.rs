@@ -255,8 +255,12 @@ async fn spawn_api_server(
     let addr = listener.local_addr().expect("读取 API 监听地址失败");
     let port = addr.port();
     let (event_sender, _event_receiver) = tokio::sync::broadcast::channel::<ApiEvent>(64);
+    let admin_token_path = plugins_dir.join("admin_token");
+    std::fs::write(&admin_token_path, format!("{admin_token}\n"))
+        .expect("写入测试 admin_token 文件失败");
     let app = build_http_router(ServerContext::new(
         admin_token,
+        admin_token_path,
         database,
         secret_store,
         plugins_dir,

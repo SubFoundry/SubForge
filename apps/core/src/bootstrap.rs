@@ -99,6 +99,7 @@ async fn run_server(args: RunArgs) -> Result<()> {
     let (event_sender, _event_receiver) = tokio::sync::broadcast::channel::<ApiEvent>(256);
     let server_context = ServerContext::new(
         admin_token.clone(),
+        data_dir.join("admin_token"),
         Arc::clone(&database),
         Arc::clone(&secret_store),
         data_dir.join("plugins"),

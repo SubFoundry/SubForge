@@ -55,8 +55,8 @@ pub(crate) use profiles::{
     update_profile_handler,
 };
 pub(crate) use settings::{
-    get_system_settings_handler, get_system_status_handler, shutdown_system_handler,
-    update_system_settings_handler,
+    get_system_settings_handler, get_system_status_handler, rotate_admin_token_handler,
+    shutdown_system_handler, update_system_settings_handler,
 };
 pub(crate) use sources::{
     create_source_handler, delete_source_handler, list_sources_handler, refresh_source_handler,
@@ -78,6 +78,11 @@ pub(crate) struct SystemStatusResponse {
 #[derive(Debug, Serialize)]
 pub(crate) struct ShutdownResponse {
     pub(crate) accepted: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RotateAdminTokenResponse {
+    pub(crate) token: String,
 }
 
 #[derive(Debug, Deserialize)]

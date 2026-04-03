@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use app_common::{ErrorResponse, Profile, ProxyNode};
@@ -31,7 +31,8 @@ pub struct ApiEvent {
 
 #[derive(Clone)]
 pub struct ServerContext {
-    pub(crate) admin_token: Arc<String>,
+    pub(crate) admin_token: Arc<RwLock<String>>,
+    pub(crate) admin_token_path: Arc<PathBuf>,
     pub(crate) database: Arc<Database>,
     pub(crate) secret_store: Arc<dyn SecretStore>,
     pub(crate) plugins_dir: PathBuf,
@@ -47,6 +48,7 @@ pub struct ServerContext {
 impl ServerContext {
     pub fn new(
         admin_token: String,
+        admin_token_path: PathBuf,
         database: Arc<Database>,
         secret_store: Arc<dyn SecretStore>,
         plugins_dir: PathBuf,
@@ -55,7 +57,8 @@ impl ServerContext {
     ) -> Self {
         let (shutdown_signal, _shutdown_receiver) = watch::channel(false);
         Self {
-            admin_token: Arc::new(admin_token),
+            admin_token: Arc::new(RwLock::new(admin_token)),
+            admin_token_path: Arc::new(admin_token_path),
             database,
             secret_store,
             plugins_dir,
