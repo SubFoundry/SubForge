@@ -175,6 +175,16 @@ export type RefreshLog = {
   nodeCount: number | null;
   errorCode: string | null;
   errorMessage: string | null;
+  scriptLogs: ScriptRunLog[];
+};
+
+export type ScriptRunLog = {
+  id: string;
+  sourceId: string;
+  pluginId: string;
+  level: string;
+  message: string;
+  createdAt: string;
 };
 
 export type LogsResponse = {

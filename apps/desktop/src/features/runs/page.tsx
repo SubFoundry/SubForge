@@ -35,6 +35,7 @@ export default function RunsPage() {
         offset: (page - 1) * PAGE_SIZE,
         status: statusFilter === "all" ? undefined : statusFilter,
         sourceId: sourceFilter === "all" ? undefined : sourceFilter,
+        includeScriptLogs: true,
       }),
     enabled: phase === "running",
     refetchInterval: 15_000,
@@ -178,6 +179,8 @@ function RunItem({
   onToggle: () => void;
 }) {
   const durationText = formatDuration(log.startedAt, log.finishedAt);
+  const hasScriptLogs = log.scriptLogs.length > 0;
+  const hasDetails = log.status === "failed" || hasScriptLogs;
   const statusClass =
     log.status === "success"
       ? "bg-emerald-500/20 text-emerald-300"
@@ -200,21 +203,54 @@ function RunItem({
         </div>
         <div className="flex items-center gap-2">
           <span className={`rounded-full px-2 py-1 text-xs ${statusClass}`}>{log.status}</span>
-          {log.status === "failed" && (
+          {hasDetails && (
             <button
               type="button"
               className="rounded-md border border-[var(--panel-border)] px-2 py-1 text-xs text-[var(--app-text)] transition hover:bg-[var(--panel-bg)]"
               onClick={onToggle}
             >
-              {expanded ? "收起错误" : "查看错误"}
+              {expanded ? "收起详情" : "查看详情"}
             </button>
           )}
         </div>
       </div>
       {expanded && (
-        <div className="mt-3 rounded-md border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs">
-          <p className="font-medium text-rose-300">{log.errorCode ?? "E_INTERNAL"}</p>
-          <p className="mt-1 text-[var(--app-text)]">{log.errorMessage ?? "未知错误"}</p>
+        <div className="mt-3 space-y-2 text-xs">
+          {log.status === "failed" && (
+            <div className="rounded-md border border-rose-500/35 bg-rose-500/10 px-3 py-2">
+              <p className="font-medium text-rose-300">{log.errorCode ?? "E_INTERNAL"}</p>
+              <p className="mt-1 text-[var(--app-text)]">{log.errorMessage ?? "未知错误"}</p>
+            </div>
+          )}
+          {hasScriptLogs ? (
+            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel-muted)]/30 px-3 py-2">
+              <p className="font-medium text-[var(--app-text)]">
+                脚本日志（{log.scriptLogs.length}）
+              </p>
+              <ul className="mt-2 space-y-2">
+                {log.scriptLogs.map((item) => (
+                  <li
+                    key={item.id}
+                    className="rounded-md border border-[var(--panel-border)] bg-[var(--panel-bg)]/55 px-2 py-2"
+                  >
+                    <p className="font-medium text-[var(--app-text)]">
+                      {item.level.toUpperCase()} · {formatTimestamp(item.createdAt)}
+                    </p>
+                    <p className="mt-1 text-[var(--muted-text)]">
+                      插件：{item.pluginId} | 来源：{item.sourceId}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-[var(--app-text)]">
+                      {item.message}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <div className="rounded-md border border-[var(--panel-border)] bg-[var(--panel-bg)]/55 px-3 py-2 text-[var(--muted-text)]">
+              该任务没有脚本日志。
+            </div>
+          )}
         </div>
       )}
     </article>
