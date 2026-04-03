@@ -5,6 +5,12 @@
   "scripts": {
     "desktop:dev": "pnpm --filter @subforge/desktop dev",
     "desktop:build": "pnpm --filter @subforge/desktop build",
-    "desktop:tauri:dev": "pnpm --filter @subforge/desktop tauri dev"
+    "desktop:tauri:dev": "pnpm --filter @subforge/desktop tauri dev",
+    "docs:dev": "vitepress dev docs --host 0.0.0.0 --port 4173",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs --host 0.0.0.0 --port 4173"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
   }
 }

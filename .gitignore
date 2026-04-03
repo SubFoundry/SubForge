@@ -18,5 +18,6 @@ node_modules
 dist
 **/dist
 apps/desktop/src-tauri/target
-docs/
+docs-internal/
+docs/.vitepress/dist/
 *.tsbuildinfo

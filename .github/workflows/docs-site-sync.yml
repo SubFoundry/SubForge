@@ -1,0 +1,58 @@
+﻿name: docs-site-sync
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/**
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/docs-site-sync.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-site-sync
+  cancel-in-progress: true
+
+jobs:
+  publish-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build docs
+        run: pnpm docs:build
+
+      - name: Copy CNAME
+        run: |
+          if [ -f CNAME ]; then
+            cp CNAME docs/.vitepress/dist/CNAME
+          fi
+
+      - name: Publish to gitpage branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gitpage
+          publish_dir: docs/.vitepress/dist
+          force_orphan: true
+          enable_jekyll: false
