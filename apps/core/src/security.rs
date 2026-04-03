@@ -97,7 +97,7 @@ pub(crate) fn admin_token_config_permission_warning(
         use std::os::unix::fs::PermissionsExt;
 
         let mode = fs::metadata(path).ok()?.permissions().mode() & 0o777;
-        return build_admin_token_config_permission_warning(path, has_admin_token, mode);
+        build_admin_token_config_permission_warning(path, has_admin_token, mode)
     }
 
     #[cfg(not(unix))]
