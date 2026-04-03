@@ -1,4 +1,4 @@
-name: p8-7-ci
+name: release-ci
 
 on:
   push:

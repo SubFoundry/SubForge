@@ -98,4 +98,4 @@ Invoke-Step -Name "desktop tauri no-bundle 构建冒烟" -Action {
     pnpm -C apps/desktop tauri build --ci --no-bundle
 }
 
-Write-Host "P8.7 Gate 校验通过。"
+Write-Host "Release Gate 校验通过。"
