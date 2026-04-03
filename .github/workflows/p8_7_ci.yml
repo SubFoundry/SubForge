@@ -11,6 +11,9 @@ on:
 permissions:
   contents: read
 
+env:
+  RELEASE_ARTIFACT_RETENTION_DAYS: 14
+
 jobs:
   quality-gate:
     name: quality-${{ matrix.os }}
@@ -83,14 +86,40 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: subforge-core-${{ matrix.os }}
+          name: subforge-core-${{ matrix.os }}-x86_64-pc-windows-msvc
           path: target/release/subforge-core.exe
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
       - name: Upload core binary (Unix)
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: subforge-core-${{ matrix.os }}
+          name: subforge-core-${{ matrix.os }}-${{ runner.arch }}
           path: target/release/subforge-core
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
+
+  core-release-linux-musl:
+    name: core-release-linux-musl
+    runs-on: ubuntu-22.04
+    needs:
+      - quality-gate
+      - static-security-gate
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Build subforge-core release (linux musl)
+        run: cargo build -p subforge-core --release --target x86_64-unknown-linux-musl
+      - name: Upload core binary (Linux musl)
+        uses: actions/upload-artifact@v4
+        with:
+          name: subforge-core-ubuntu-22.04-x86_64-unknown-linux-musl
+          path: target/x86_64-unknown-linux-musl/release/subforge-core
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
 
   desktop-pipeline-smoke:
     name: desktop-pipeline-smoke-${{ matrix.os }}
@@ -128,14 +157,16 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: subforge-desktop-${{ matrix.os }}
+          name: subforge-desktop-${{ matrix.os }}-x86_64-pc-windows-msvc
           path: target/release/subforge-desktop-tauri.exe
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
       - name: Upload desktop binary (Unix)
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: subforge-desktop-${{ matrix.os }}
+          name: subforge-desktop-${{ matrix.os }}-${{ runner.arch }}
           path: target/release/subforge-desktop-tauri
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
 
   desktop-bundle:
     name: desktop-bundle-${{ matrix.os }}
@@ -180,27 +211,31 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: subforge-desktop-bundle-${{ matrix.os }}-nsis
+          name: subforge-desktop-bundle-${{ matrix.os }}-x86_64-pc-windows-msvc-nsis
           path: target/release/bundle/nsis/*.exe
           if-no-files-found: error
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
       - name: Upload DMG bundle
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: subforge-desktop-bundle-${{ matrix.os }}-dmg
+          name: subforge-desktop-bundle-${{ matrix.os }}-${{ runner.arch }}-dmg
           path: target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
       - name: Upload DEB bundle
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: subforge-desktop-bundle-${{ matrix.os }}-deb
+          name: subforge-desktop-bundle-${{ matrix.os }}-${{ runner.arch }}-deb
           path: target/release/bundle/deb/*.deb
           if-no-files-found: error
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
       - name: Upload AppImage bundle
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: subforge-desktop-bundle-${{ matrix.os }}-appimage
+          name: subforge-desktop-bundle-${{ matrix.os }}-${{ runner.arch }}-appimage
           path: target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
