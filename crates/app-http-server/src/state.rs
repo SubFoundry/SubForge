@@ -11,15 +11,17 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
+mod security_limits;
+
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const MAX_PLUGIN_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) const MAX_ZIP_ENTRIES: usize = 100;
 pub(crate) const MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES: u64 = 50 * 1024 * 1024;
-pub(crate) const AUTH_FAILURE_THRESHOLD: u32 = 5;
-pub(crate) const AUTH_FAILURE_COOLDOWN_SECONDS: u64 = 60;
 pub(crate) const MANAGEMENT_RATE_LIMIT_PER_SECOND: u32 = 30;
 pub(crate) const SUBSCRIPTION_RATE_LIMIT_PER_SECOND: u32 = 10;
 pub(crate) const PROFILE_CACHE_TTL_SECONDS: u64 = 60;
+
+pub(crate) use security_limits::{AuthFailures, RateLimiter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiEvent {
@@ -185,90 +187,6 @@ impl HostValidationState {
 
     pub(crate) fn is_allowed(&self, host_header: &str) -> bool {
         self.allowed_hosts.contains(host_header)
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct RateLimiter {
-    windows: Mutex<HashMap<String, RateWindow>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RateWindow {
-    started_at: Instant,
-    count: u32,
-}
-
-impl RateLimiter {
-    pub(crate) fn is_allowed(&self, key: &str, limit: u32, window: Duration) -> bool {
-        let mut windows = match self.windows.lock() {
-            Ok(guard) => guard,
-            Err(_) => return false,
-        };
-        let now = Instant::now();
-        let entry = windows.entry(key.to_string()).or_insert(RateWindow {
-            started_at: now,
-            count: 0,
-        });
-        if now.duration_since(entry.started_at) >= window {
-            entry.started_at = now;
-            entry.count = 0;
-        }
-        if entry.count >= limit {
-            return false;
-        }
-        entry.count += 1;
-        true
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct AuthFailures {
-    inner: Mutex<AuthFailuresState>,
-}
-
-#[derive(Debug, Default)]
-struct AuthFailuresState {
-    failures: u32,
-    cooldown_until: Option<Instant>,
-}
-
-impl AuthFailures {
-    pub(crate) fn is_in_cooldown(&self) -> bool {
-        let mut inner = match self.inner.lock() {
-            Ok(guard) => guard,
-            Err(_) => return true,
-        };
-        if let Some(deadline) = inner.cooldown_until {
-            if Instant::now() < deadline {
-                return true;
-            }
-            inner.cooldown_until = None;
-            inner.failures = 0;
-        }
-        false
-    }
-
-    pub(crate) fn record_failure(&self) -> bool {
-        let mut inner = match self.inner.lock() {
-            Ok(guard) => guard,
-            Err(_) => return true,
-        };
-        inner.failures += 1;
-        if inner.failures >= AUTH_FAILURE_THRESHOLD {
-            inner.failures = 0;
-            inner.cooldown_until =
-                Some(Instant::now() + Duration::from_secs(AUTH_FAILURE_COOLDOWN_SECONDS));
-            return true;
-        }
-        false
-    }
-
-    pub(crate) fn reset(&self) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.failures = 0;
-            inner.cooldown_until = None;
-        }
     }
 }
 

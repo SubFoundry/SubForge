@@ -152,9 +152,12 @@ async fn run_server(args: RunArgs) -> Result<()> {
         secret_backend = secret_backend.as_str(),
         "SubForge Core 已启动"
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(shutdown_receiver))
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(shutdown_receiver))
+    .await?;
 
     drop(lock_file);
     drop(logging_runtime);

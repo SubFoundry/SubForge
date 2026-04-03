@@ -22,6 +22,7 @@ use super::{ApiEvent, ServerContext, build_router};
 
 mod auth;
 mod e2e;
+mod helpers_sanitization;
 
 pub(super) fn build_test_state() -> ServerContext {
     let database = Arc::new(app_storage::Database::open_in_memory().expect("初始化数据库失败"));

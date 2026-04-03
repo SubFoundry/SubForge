@@ -338,6 +338,111 @@ async fn auth_failures_trigger_rate_limit_after_five_invalid_attempts() {
 }
 
 #[tokio::test]
+async fn auth_failure_cooldown_isolated_by_request_source() {
+    let app = build_router(build_test_state());
+
+    for _ in 0..5 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/plugins")
+                    .header(HOST, "127.0.0.1:18118")
+                    .header("x-forwarded-for", "198.51.100.10")
+                    .header("authorization", "Bearer wrong-token")
+                    .body(Body::empty())
+                    .expect("创建请求失败"),
+            )
+            .await
+            .expect("请求执行失败");
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            break;
+        }
+    }
+
+    let blocked_source = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/plugins")
+                .header(HOST, "127.0.0.1:18118")
+                .header("x-forwarded-for", "198.51.100.10")
+                .header("authorization", "Bearer wrong-token")
+                .body(Body::empty())
+                .expect("创建请求失败"),
+        )
+        .await
+        .expect("请求执行失败");
+    assert_eq!(blocked_source.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let independent_source = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/plugins")
+                .header(HOST, "127.0.0.1:18118")
+                .header("x-forwarded-for", "198.51.100.11")
+                .header("authorization", "Bearer wrong-token")
+                .body(Body::empty())
+                .expect("创建请求失败"),
+        )
+        .await
+        .expect("请求执行失败");
+    assert_eq!(independent_source.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn management_rate_limit_isolated_by_request_source() {
+    use crate::state::MANAGEMENT_RATE_LIMIT_PER_SECOND;
+
+    let app = build_router(build_test_state());
+    for _ in 0..MANAGEMENT_RATE_LIMIT_PER_SECOND {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/plugins")
+                    .header(HOST, "127.0.0.1:18118")
+                    .header("x-forwarded-for", "203.0.113.20")
+                    .header("authorization", "Bearer test-admin-token")
+                    .body(Body::empty())
+                    .expect("创建请求失败"),
+            )
+            .await
+            .expect("请求执行失败");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let throttled = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/plugins")
+                .header(HOST, "127.0.0.1:18118")
+                .header("x-forwarded-for", "203.0.113.20")
+                .header("authorization", "Bearer test-admin-token")
+                .body(Body::empty())
+                .expect("创建请求失败"),
+        )
+        .await
+        .expect("请求执行失败");
+    assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let independent = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/plugins")
+                .header(HOST, "127.0.0.1:18118")
+                .header("x-forwarded-for", "203.0.113.21")
+                .header("authorization", "Bearer test-admin-token")
+                .body(Body::empty())
+                .expect("创建请求失败"),
+        )
+        .await
+        .expect("请求执行失败");
+    assert_eq!(independent.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn plugin_import_rejects_zip_path_traversal_entries() {
     let app = build_router(build_test_state());
     let boundary = "----subforge-path-traversal-boundary";

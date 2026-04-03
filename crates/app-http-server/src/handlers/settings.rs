@@ -119,7 +119,7 @@ pub(crate) async fn rotate_admin_token_handler(
             .map_err(|_| internal_error_response())?;
         *guard = token.clone();
     }
-    state.auth_failures.reset();
+    state.auth_failures.reset_all();
     emit_event(
         &state,
         "system:admin-token-rotated",

@@ -5,6 +5,7 @@ use std::path::{Component, Path};
 
 use app_common::{AppSetting, ErrorResponse, Plugin};
 use app_core::{CoreError, SourceWithConfig};
+use app_plugin_runtime::PluginRuntimeError;
 use app_storage::{
     Database, ExportTokenRepository, PluginRepository, SourceRepository, StorageError,
 };
@@ -277,22 +278,29 @@ pub(crate) fn core_error_to_response(error: CoreError) -> (StatusCode, Json<Erro
         CoreError::SubscriptionParse(message) => {
             error_response(StatusCode::BAD_REQUEST, &code, message, false)
         }
-        other => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
+        CoreError::PluginRuntime(PluginRuntimeError::ScriptTimeout(message))
+        | CoreError::PluginRuntime(PluginRuntimeError::ScriptLimit(message))
+        | CoreError::PluginRuntime(PluginRuntimeError::ScriptRuntime(message)) => {
+            error_response(StatusCode::BAD_REQUEST, &code, message, true)
+        }
+        CoreError::Transport(_) => error_response(
+            StatusCode::BAD_GATEWAY,
             &code,
-            other.to_string(),
+            "Upstream request failed",
             true,
         ),
+        CoreError::PluginRuntime(_)
+        | CoreError::Storage(_)
+        | CoreError::Secret(_)
+        | CoreError::Io(_)
+        | CoreError::TimeFormat(_)
+        | CoreError::Random(_) => internal_error_response(),
     }
 }
 
 pub(crate) fn storage_error_to_response(error: StorageError) -> (StatusCode, Json<ErrorResponse>) {
-    error_response(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "E_INTERNAL",
-        format!("存储层错误：{error}"),
-        true,
-    )
+    let _ = error;
+    internal_error_response()
 }
 
 pub(crate) fn unauthorized_error_response() -> (StatusCode, Json<ErrorResponse>) {
