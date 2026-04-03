@@ -104,6 +104,43 @@ async fn plugins_api_accepts_admin_header() {
 }
 
 #[tokio::test]
+async fn events_endpoint_requires_admin_token() {
+    let app = build_router(build_test_state());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/events")
+                .header(HOST, "127.0.0.1:18118")
+                .body(Body::empty())
+                .expect("创建请求失败"),
+        )
+        .await
+        .expect("请求执行失败");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let authorized_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/events")
+                .header(HOST, "127.0.0.1:18118")
+                .header("authorization", "Bearer test-admin-token")
+                .body(Body::empty())
+                .expect("创建请求失败"),
+        )
+        .await
+        .expect("请求执行失败");
+    assert_eq!(authorized_response.status(), StatusCode::OK);
+    assert!(
+        authorized_response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"))
+    );
+}
+
+#[tokio::test]
 async fn options_preflight_returns_204_without_cors_header() {
     let app = build_router(build_test_state());
     let response = app

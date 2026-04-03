@@ -8,6 +8,11 @@
 .DS_Store
 Thumbs.db
 /.subforge
+/.subforge-desktop
+/.tmp-shutdown-smoke
+/data
+/screenshots
+/sing-box-*-windows-amd64
 node_modules
 **/node_modules
 dist

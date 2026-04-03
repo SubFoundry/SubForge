@@ -9,7 +9,7 @@ publish.workspace = true
 [package.metadata]
 
 [build-dependencies]
-tauri-build = { version = "^2.1" }
+tauri-build = { version = "^2.1", features = [] }
 
 [dependencies]
 anyhow.workspace = true
@@ -17,7 +17,7 @@ base64.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "^2.10" }
+tauri = { version = "^2.10", features = ["tray-icon"] }
 tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]
