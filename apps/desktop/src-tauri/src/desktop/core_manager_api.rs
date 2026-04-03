@@ -41,9 +41,9 @@ impl CoreManager {
         }
 
         let path = normalize_path(&request.path);
-        if is_admin_token_rotation_path(&path) {
+        if is_admin_token_path(&path) {
             return Err(anyhow!(
-                "安全策略限制：前端 IPC 不允许调用 /api/admin-token/rotate"
+                "安全策略限制：前端 IPC 不允许调用 /api/admin-token/*"
             ));
         }
         if path.starts_with("/api/") && admin_token.is_none() {
@@ -203,10 +203,11 @@ impl CoreManager {
     }
 }
 
-fn is_admin_token_rotation_path(path: &str) -> bool {
+fn is_admin_token_path(path: &str) -> bool {
     let normalized = normalize_path(path);
     let route = normalized.split('?').next().unwrap_or_default();
-    route.eq_ignore_ascii_case("/api/admin-token/rotate")
+    let lowered = route.to_ascii_lowercase();
+    lowered == "/api/admin-token" || lowered.starts_with("/api/admin-token/")
 }
 
 const REDACTED_VALUE: &str = "***REDACTED***";
@@ -245,7 +246,8 @@ fn redact_admin_token_fields(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, nested) in map {
-                if key.eq_ignore_ascii_case("admin_token") {
+                let normalized_key = key.replace(['_', '-'], "");
+                if normalized_key.eq_ignore_ascii_case("admintoken") {
                     *nested = Value::String(REDACTED_VALUE.to_string());
                     continue;
                 }
@@ -267,23 +269,23 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{REDACTED_VALUE, is_admin_token_rotation_path, sanitize_core_response};
+    use super::{REDACTED_VALUE, is_admin_token_path, sanitize_core_response};
 
     #[test]
-    fn admin_token_rotate_path_is_blocked() {
-        assert!(is_admin_token_rotation_path("/api/admin-token/rotate"));
-        assert!(is_admin_token_rotation_path("api/admin-token/rotate"));
-        assert!(is_admin_token_rotation_path(
-            "/api/admin-token/rotate?from=desktop"
-        ));
-        assert!(is_admin_token_rotation_path("/API/ADMIN-TOKEN/ROTATE"));
+    fn admin_token_paths_are_blocked() {
+        assert!(is_admin_token_path("/api/admin-token"));
+        assert!(is_admin_token_path("/api/admin-token/rotate"));
+        assert!(is_admin_token_path("api/admin-token/status"));
+        assert!(is_admin_token_path("/api/admin-token/rotate?from=desktop"));
+        assert!(is_admin_token_path("/API/ADMIN-TOKEN/ROTATE"));
     }
 
     #[test]
     fn non_admin_token_paths_are_not_blocked() {
-        assert!(!is_admin_token_rotation_path("/api/tokens/p-1/rotate"));
-        assert!(!is_admin_token_rotation_path("/api/system/status"));
-        assert!(!is_admin_token_rotation_path("/health"));
+        assert!(!is_admin_token_path("/api/tokens/p-1/rotate"));
+        assert!(!is_admin_token_path("/api/system/status"));
+        assert!(!is_admin_token_path("/api/admin-tokenize"));
+        assert!(!is_admin_token_path("/health"));
     }
 
     #[test]
@@ -296,6 +298,8 @@ mod tests {
 
         let body = json!({
             "admin_token": "desktop-admin-token",
+            "adminToken": "desktop-admin-token",
+            "admin-token": "desktop-admin-token",
             "nested": { "Admin_Token": "desktop-admin-token" },
             "token": "export-token-should-remain"
         })
@@ -312,6 +316,8 @@ mod tests {
         let payload: serde_json::Value =
             serde_json::from_str(&sanitized_body).expect("响应必须仍为 JSON");
         assert_eq!(payload["admin_token"], REDACTED_VALUE);
+        assert_eq!(payload["adminToken"], REDACTED_VALUE);
+        assert_eq!(payload["admin-token"], REDACTED_VALUE);
         assert_eq!(payload["nested"]["Admin_Token"], REDACTED_VALUE);
         assert_eq!(payload["token"], "export-token-should-remain");
     }
