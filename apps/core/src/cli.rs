@@ -28,7 +28,7 @@ pub(crate) enum Command {
     Version,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SecretBackendKind {
     Keyring,
@@ -63,6 +63,9 @@ pub(crate) struct SecretStoreArgs {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct RunArgs {
+    /// 无头模式配置文件路径（TOML）
+    #[arg(short = 'c', long = "config")]
+    pub(crate) config: Option<PathBuf>,
     /// 监听地址，默认仅本机回环
     #[arg(long, default_value = DEFAULT_HOST)]
     pub(crate) host: String,
@@ -81,6 +84,9 @@ pub(crate) struct RunArgs {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct CheckArgs {
+    /// 无头模式配置文件路径（TOML）
+    #[arg(short = 'c', long = "config")]
+    pub(crate) config: Option<PathBuf>,
     /// 数据目录，默认当前目录下 .subforge
     #[arg(long)]
     pub(crate) data_dir: Option<PathBuf>,

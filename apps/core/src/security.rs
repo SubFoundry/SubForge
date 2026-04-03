@@ -22,8 +22,22 @@ pub(crate) fn ensure_data_dir(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn load_or_create_admin_token(data_dir: &Path) -> Result<String> {
+pub(crate) fn load_or_create_admin_token_with_override(
+    data_dir: &Path,
+    configured: Option<&str>,
+) -> Result<String> {
     let token_path = data_dir.join("admin_token");
+    if let Some(configured_token) = configured {
+        let token = configured_token.trim();
+        if token.is_empty() {
+            return Err(anyhow!("server.admin_token 不能为空字符串"));
+        }
+        fs::write(&token_path, format!("{token}\n"))
+            .with_context(|| format!("写入 admin_token 失败: {}", token_path.display()))?;
+        set_owner_only_file_permissions(&token_path)?;
+        return Ok(token.to_string());
+    }
+
     if token_path.exists() {
         let token = fs::read_to_string(&token_path)
             .with_context(|| format!("读取 admin_token 失败: {}", token_path.display()))?;

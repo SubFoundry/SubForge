@@ -21,3 +21,6 @@ app-common = { path = "../../crates/app-common" }
 app-storage = { path = "../../crates/app-storage" }
 app-secrets = { path = "../../crates/app-secrets" }
 app-http-server = { path = "../../crates/app-http-server" }
+app-core = { path = "../../crates/app-core" }
+toml = "^0.9"
+rusqlite.workspace = true

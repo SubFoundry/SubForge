@@ -1,5 +1,7 @@
 mod bootstrap;
 mod cli;
+mod config;
+mod headless;
 mod security;
 mod settings_seed;
 #[cfg(test)]

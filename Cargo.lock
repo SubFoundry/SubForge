@@ -4535,6 +4535,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "app-common",
+ "app-core",
  "app-http-server",
  "app-secrets",
  "app-storage",
@@ -4543,10 +4544,12 @@ dependencies = [
  "clap",
  "fs2",
  "rand 0.9.2",
+ "rusqlite",
  "serde",
  "serde_json",
  "time",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -16,15 +16,20 @@ use crate::cli::{
     DEFAULT_SECRETS_FILE_NAME, GuiBootstrap, RefreshArgs, RunArgs, SecretBackendKind,
     SecretStoreArgs,
 };
+use crate::config::LoadedHeadlessConfig;
+use crate::headless::{
+    apply_headless_configuration, apply_headless_settings, validate_headless_configuration,
+};
 use crate::security::{
-    acquire_single_instance_lock, ensure_data_dir, is_loopback_host, load_or_create_admin_token,
-    resolve_data_dir, set_owner_only_file_permissions,
+    acquire_single_instance_lock, ensure_data_dir, is_loopback_host,
+    load_or_create_admin_token_with_override, resolve_data_dir, set_owner_only_file_permissions,
 };
 use crate::settings_seed::seed_default_settings;
 
 pub(crate) async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Run(RunArgs {
+        config: None,
         host: DEFAULT_HOST.to_string(),
         port: DEFAULT_PORT,
         gui_mode: false,
@@ -46,19 +51,48 @@ pub(crate) async fn run_cli() -> Result<()> {
 }
 
 async fn run_server(args: RunArgs) -> Result<()> {
+    let loaded_config = load_headless_config(args.config.as_deref())?;
+    let (host, port) = resolve_listen_host_port(&args, loaded_config.as_ref())?;
     let data_dir = resolve_data_dir(args.data_dir.clone())?;
     ensure_data_dir(&data_dir)?;
     let lock_file = acquire_single_instance_lock(&data_dir)?;
-    let admin_token = load_or_create_admin_token(&data_dir)?;
-    let database = initialize_database(&data_dir)?;
-    let (secret_backend, secret_store) = initialize_secret_store(&args.secrets, &data_dir)?;
 
-    seed_default_settings(database.as_ref(), &args)?;
+    let admin_override = loaded_config
+        .as_ref()
+        .and_then(|config| config.config.server.admin_token.as_deref());
+    let admin_token = load_or_create_admin_token_with_override(&data_dir, admin_override)?;
 
-    if !is_loopback_host(&args.host) {
+    let database_path = resolve_database_path(&data_dir, loaded_config.as_ref())?;
+    let database = initialize_database(&database_path)?;
+    let effective_secret_args =
+        build_effective_secret_args(&args.secrets, loaded_config.as_ref(), &data_dir)?;
+    let (secret_backend, secret_store) =
+        initialize_secret_store(&effective_secret_args, &data_dir)?;
+
+    seed_default_settings(database.as_ref(), &host, port)?;
+    if let Some(config) = &loaded_config {
+        println!("已加载无头配置文件: {}", config.path.display());
+        apply_headless_settings(config, database.as_ref())?;
+        let report = apply_headless_configuration(
+            config,
+            database.as_ref(),
+            Arc::clone(&secret_store),
+            &data_dir.join("plugins"),
+        )?;
+        println!(
+            "无头配置已加载：插件安装 {}，来源新增/更新 {}/{}，Profile 新增/更新 {}/{}",
+            report.installed_plugins,
+            report.created_sources,
+            report.updated_sources,
+            report.created_profiles,
+            report.updated_profiles
+        );
+    }
+
+    if !is_loopback_host(&host) {
         eprintln!(
             "WARNING: 当前监听地址为 {}，这不是回环地址，请确认安全风险。",
-            args.host
+            host
         );
     }
 
@@ -68,15 +102,15 @@ async fn run_server(args: RunArgs) -> Result<()> {
         Arc::clone(&database),
         Arc::clone(&secret_store),
         data_dir.join("plugins"),
-        args.port,
+        port,
         event_sender,
     ));
 
     if args.gui_mode {
         let bootstrap = GuiBootstrap {
             version: APP_VERSION,
-            listen_addr: args.host.clone(),
-            port: args.port,
+            listen_addr: host.clone(),
+            port,
             admin_token: admin_token.clone(),
             secrets_backend: secret_backend.as_str(),
         };
@@ -86,15 +120,15 @@ async fn run_server(args: RunArgs) -> Result<()> {
         stdout.flush()?;
     }
 
-    let socket: SocketAddr = format!("{}:{}", args.host, args.port)
+    let socket: SocketAddr = format!("{host}:{port}")
         .parse()
-        .with_context(|| format!("无效监听地址: {}:{}", args.host, args.port))?;
+        .with_context(|| format!("无效监听地址: {host}:{port}"))?;
     let listener = tokio::net::TcpListener::bind(socket).await?;
 
     println!(
         "SubForge Core 已启动: http://{}:{}（secrets backend: {}）",
-        args.host,
-        args.port,
+        host,
+        port,
         secret_backend.as_str()
     );
     axum::serve(listener, app)
@@ -106,25 +140,33 @@ async fn run_server(args: RunArgs) -> Result<()> {
 }
 
 fn run_check(args: CheckArgs) -> Result<()> {
+    let loaded_config = load_headless_config(args.config.as_deref())?;
+    let (host, port) = resolve_listen_host_port_for_check(loaded_config.as_ref())?;
     let data_dir = resolve_data_dir(args.data_dir)?;
     ensure_data_dir(&data_dir)?;
-    load_or_create_admin_token(&data_dir)?;
-    let database = initialize_database(&data_dir)?;
-    initialize_secret_store(&args.secrets, &data_dir)?;
-    seed_default_settings(
-        database.as_ref(),
-        &RunArgs {
-            host: DEFAULT_HOST.to_string(),
-            port: DEFAULT_PORT,
-            gui_mode: false,
-            data_dir: Some(data_dir.clone()),
-            secrets: args.secrets.clone(),
-        },
-    )?;
+
+    let admin_override = loaded_config
+        .as_ref()
+        .and_then(|config| config.config.server.admin_token.as_deref());
+    load_or_create_admin_token_with_override(&data_dir, admin_override)?;
+
+    let database_path = resolve_database_path(&data_dir, loaded_config.as_ref())?;
+    let database = initialize_database(&database_path)?;
+    let effective_secret_args =
+        build_effective_secret_args(&args.secrets, loaded_config.as_ref(), &data_dir)?;
+    initialize_secret_store(&effective_secret_args, &data_dir)?;
+    seed_default_settings(database.as_ref(), &host, port)?;
+
+    if let Some(config) = &loaded_config {
+        println!("已加载无头配置文件: {}", config.path.display());
+        apply_headless_settings(config, database.as_ref())?;
+        validate_headless_configuration(config)?;
+    }
+
     println!(
         "配置检查通过，数据目录: {}，密钥后端: {}",
         data_dir.display(),
-        args.secrets.secrets_backend.as_str()
+        effective_secret_args.secrets_backend.as_str()
     );
     Ok(())
 }
@@ -167,11 +209,69 @@ async fn shutdown_signal() {
     println!("收到退出信号，正在优雅关闭...");
 }
 
-fn initialize_database(data_dir: &Path) -> Result<Arc<Database>> {
-    let database_path = data_dir.join(DEFAULT_DB_FILE_NAME);
-    let database = Database::open(&database_path)
+fn load_headless_config(path: Option<&Path>) -> Result<Option<LoadedHeadlessConfig>> {
+    path.map(LoadedHeadlessConfig::from_file).transpose()
+}
+
+fn resolve_listen_host_port(
+    args: &RunArgs,
+    loaded_config: Option<&LoadedHeadlessConfig>,
+) -> Result<(String, u16)> {
+    if let Some(config) = loaded_config {
+        return config.listen_host_port();
+    }
+    Ok((args.host.clone(), args.port))
+}
+
+fn resolve_listen_host_port_for_check(
+    loaded_config: Option<&LoadedHeadlessConfig>,
+) -> Result<(String, u16)> {
+    if let Some(config) = loaded_config {
+        return config.listen_host_port();
+    }
+    Ok((DEFAULT_HOST.to_string(), DEFAULT_PORT))
+}
+
+fn resolve_database_path(
+    data_dir: &Path,
+    loaded_config: Option<&LoadedHeadlessConfig>,
+) -> Result<PathBuf> {
+    if let Some(config) = loaded_config {
+        if let Some(path) = config.resolved_db_path()? {
+            return Ok(path);
+        }
+    }
+    Ok(data_dir.join(DEFAULT_DB_FILE_NAME))
+}
+
+fn build_effective_secret_args(
+    cli_args: &SecretStoreArgs,
+    loaded_config: Option<&LoadedHeadlessConfig>,
+    data_dir: &Path,
+) -> Result<SecretStoreArgs> {
+    let mut effective = cli_args.clone();
+    if let Some(config) = loaded_config {
+        if let Some(backend) = config.backend_override() {
+            effective.secrets_backend = backend;
+        }
+        if let Some(secrets_file) = config.resolved_secrets_file_path()? {
+            effective.secrets_file = Some(secrets_file);
+        }
+    }
+    if effective.secrets_backend == SecretBackendKind::File && effective.secrets_file.is_none() {
+        effective.secrets_file = Some(data_dir.join(DEFAULT_SECRETS_FILE_NAME));
+    }
+    Ok(effective)
+}
+
+fn initialize_database(database_path: &Path) -> Result<Arc<Database>> {
+    if let Some(parent) = database_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("创建数据库目录失败: {}", parent.display()))?;
+    }
+    let database = Database::open(database_path)
         .with_context(|| format!("初始化数据库失败: {}", database_path.display()))?;
-    set_owner_only_file_permissions(&database_path)?;
+    set_owner_only_file_permissions(database_path)?;
     Ok(Arc::new(database))
 }
 

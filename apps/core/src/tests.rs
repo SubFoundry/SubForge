@@ -5,6 +5,8 @@ use crate::bootstrap::run_refresh;
 use crate::cli::RefreshArgs;
 use crate::settings_seed::set_default_setting_if_absent;
 
+mod config;
+
 #[test]
 fn set_default_setting_only_writes_when_missing() -> StorageResult<()> {
     let db = Database::open_in_memory()?;

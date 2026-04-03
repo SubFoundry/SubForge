@@ -4,15 +4,17 @@ use app_storage::{Database, SettingsRepository};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::cli::RunArgs;
-
-pub(crate) fn seed_default_settings(database: &Database, args: &RunArgs) -> Result<()> {
+pub(crate) fn seed_default_settings(
+    database: &Database,
+    listen_host: &str,
+    listen_port: u16,
+) -> Result<()> {
     let repository = SettingsRepository::new(database);
     let updated_at = current_timestamp_rfc3339()?;
 
     let defaults = [
-        ("http_listen_addr", args.host.clone()),
-        ("http_listen_port", args.port.to_string()),
+        ("http_listen_addr", listen_host.to_string()),
+        ("http_listen_port", listen_port.to_string()),
         ("log_level", "info".to_string()),
         ("log_retention_days", "7".to_string()),
         ("theme", "dark".to_string()),

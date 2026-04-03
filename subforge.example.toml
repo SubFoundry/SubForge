@@ -1,0 +1,51 @@
+# SubForge 无头模式示例配置
+
+[server]
+listen = "127.0.0.1:18118"
+# admin_token 可选；不填时会自动生成并写入 data_dir/admin_token
+# admin_token = "replace-with-your-admin-token"
+
+[log]
+level = "info"
+dir = "./logs"
+retention_days = 7
+
+[storage]
+db_path = "./data/subforge.db"
+
+[secrets]
+backend = "env"
+# backend = "file"
+# file_path = "./data/secrets.enc"
+
+[refresh]
+auto_on_start = true
+default_interval_sec = 1800
+
+[plugins]
+dirs = [
+  "./plugins/builtins/static",
+  "./plugins/examples/script-mock",
+]
+
+[[sources]]
+name = "static-source"
+plugin = "subforge.builtin.static"
+[sources.config]
+url = "https://example.com/subscription.txt"
+user_agent = "SubForge/0.1"
+
+[[sources]]
+name = "script-source"
+plugin = "vendor.example.script-mock"
+[sources.config]
+subscription_url = "https://example.com/mock-subscription.txt"
+username = "demo-user"
+[sources.secrets]
+password = { env = "SUBFORGE_SCRIPT_PASSWORD" }
+# password = { value = "plaintext-for-testing" }
+
+[[profiles]]
+name = "default"
+sources = ["static-source", "script-source"]
+# export_token = "replace-with-readonly-token"
