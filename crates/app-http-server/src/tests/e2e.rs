@@ -108,6 +108,11 @@ async fn e2e_import_source_refresh_and_raw_profile_output() {
         .and_then(Value::as_str)
         .expect("Profile 响应缺少 id")
         .to_string();
+    let export_token_from_response = profile_payload
+        .pointer("/profile/export_token")
+        .and_then(Value::as_str)
+        .expect("Profile 响应缺少 export_token")
+        .to_string();
 
     let export_token_repository = ExportTokenRepository::new(state.database.as_ref());
     let export_token = export_token_repository
@@ -115,6 +120,26 @@ async fn e2e_import_source_refresh_and_raw_profile_output() {
         .expect("读取 export_token 失败")
         .expect("创建 Profile 后应自动生成 export_token")
         .token;
+    assert_eq!(export_token, export_token_from_response);
+
+    let profiles_response = app
+        .clone()
+        .oneshot(admin_request(Method::GET, "/api/profiles", Body::empty()))
+        .await
+        .expect("读取 profile 列表失败");
+    assert_eq!(profiles_response.status(), StatusCode::OK);
+    let profiles_payload = read_json(profiles_response).await;
+    let profiles = profiles_payload
+        .get("profiles")
+        .and_then(Value::as_array)
+        .expect("profiles 响应缺少数组字段");
+    assert!(profiles.iter().any(|item| {
+        item.pointer("/profile/id").and_then(Value::as_str) == Some(profile_id.as_str())
+            && item
+                .get("export_token")
+                .and_then(Value::as_str)
+                .is_some_and(|token| token == export_token)
+    }));
 
     let status_before_refresh = app
         .clone()
@@ -763,6 +788,97 @@ async fn e2e_script_source_refresh_via_management_api() {
     );
 
     server_task.abort();
+}
+
+#[tokio::test]
+async fn e2e_rotate_profile_export_token_supports_grace_period() {
+    let state = build_test_state();
+    let app = build_router(state.clone());
+
+    let profile_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/profiles",
+            &json!({
+                "name": "Rotate Token Profile",
+                "source_ids": []
+            }),
+        ))
+        .await
+        .expect("创建 Profile 请求执行失败");
+    assert_eq!(profile_response.status(), StatusCode::CREATED);
+    let profile_payload = read_json(profile_response).await;
+    let profile_id = profile_payload
+        .pointer("/profile/profile/id")
+        .and_then(Value::as_str)
+        .expect("Profile 响应缺少 id")
+        .to_string();
+    let old_token = profile_payload
+        .pointer("/profile/export_token")
+        .and_then(Value::as_str)
+        .expect("Profile 响应缺少 export_token")
+        .to_string();
+
+    let rotate_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::POST,
+            &format!("/api/tokens/{profile_id}/rotate"),
+            Body::empty(),
+        ))
+        .await
+        .expect("轮换 token 请求执行失败");
+    assert_eq!(rotate_response.status(), StatusCode::OK);
+    let rotate_payload = read_json(rotate_response).await;
+    let new_token = rotate_payload
+        .get("token")
+        .and_then(Value::as_str)
+        .expect("轮换响应缺少 token")
+        .to_string();
+    let previous_expires_at = rotate_payload
+        .get("previous_token_expires_at")
+        .and_then(Value::as_str)
+        .expect("轮换响应缺少 previous_token_expires_at")
+        .to_string();
+    assert_ne!(old_token, new_token);
+    assert_eq!(new_token.len(), 43);
+
+    let export_token_repository = ExportTokenRepository::new(state.database.as_ref());
+    let active = export_token_repository
+        .get_active_token(&profile_id)
+        .expect("读取 active token 失败")
+        .expect("轮换后应存在 active token");
+    assert_eq!(active.token, new_token);
+    assert!(
+        export_token_repository
+            .is_valid_token(&profile_id, &old_token, "1970-01-01T00:00:00Z")
+            .expect("校验旧 token 失败")
+    );
+    assert!(
+        !export_token_repository
+            .is_valid_token(&profile_id, &old_token, &previous_expires_at)
+            .expect("校验旧 token 过期失败")
+    );
+
+    let profiles_response = app
+        .clone()
+        .oneshot(admin_request(Method::GET, "/api/profiles", Body::empty()))
+        .await
+        .expect("读取 profile 列表失败");
+    assert_eq!(profiles_response.status(), StatusCode::OK);
+    let profiles_payload = read_json(profiles_response).await;
+    let profiles = profiles_payload
+        .get("profiles")
+        .and_then(Value::as_array)
+        .expect("profiles 响应缺少数组字段");
+    assert!(profiles.iter().any(|item| {
+        item.pointer("/profile/id").and_then(Value::as_str) == Some(profile_id.as_str())
+            && item
+                .get("export_token")
+                .and_then(Value::as_str)
+                .is_some_and(|token| token == new_token)
+    }));
 }
 
 #[tokio::test]

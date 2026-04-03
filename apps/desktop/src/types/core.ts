@@ -119,6 +119,34 @@ export type RefreshSourceResponse = {
   node_count: number;
 };
 
+export type ProfileRecord = {
+  id: string;
+  name: string;
+  description?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProfileItem = {
+  profile: ProfileRecord;
+  source_ids: string[];
+  export_token?: string | null;
+};
+
+export type ProfileListResponse = {
+  profiles: ProfileItem[];
+};
+
+export type ProfileResponse = {
+  profile: ProfileItem;
+};
+
+export type RotateProfileExportTokenResponse = {
+  profile_id: string;
+  token: string;
+  previous_token_expires_at: string;
+};
+
 export type SystemStatusResponse = {
   activeSources: number;
   totalNodes: number;

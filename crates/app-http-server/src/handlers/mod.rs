@@ -7,8 +7,8 @@ use std::time::Duration;
 use app_common::{AppSetting, ConfigSchema, Plugin, Profile, ProxyNode, SourceInstance};
 use app_core::{Engine, PluginInstallService, SourceService};
 use app_storage::{
-    NodeCacheRepository, PluginRepository, ProfileRepository, RefreshJobRepository,
-    SettingsRepository, SourceRepository,
+    ExportTokenRepository, NodeCacheRepository, PluginRepository, ProfileRepository,
+    RefreshJobRepository, SettingsRepository, SourceRepository,
 };
 use axum::Json;
 use axum::extract::{Multipart, Path as AxumPath, Query, State};
@@ -51,7 +51,8 @@ pub(crate) use plugins::{
 pub(crate) use profiles::{
     create_profile_handler, delete_profile_handler, get_profile_base64_handler,
     get_profile_clash_handler, get_profile_raw_handler, get_profile_singbox_handler,
-    list_profiles_handler, refresh_profile_handler, update_profile_handler,
+    list_profiles_handler, refresh_profile_handler, rotate_profile_export_token_handler,
+    update_profile_handler,
 };
 pub(crate) use settings::{
     get_system_settings_handler, get_system_status_handler, update_system_settings_handler,
@@ -133,6 +134,13 @@ pub(crate) struct RefreshProfileResponse {
     pub(crate) node_count: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct RotateProfileExportTokenResponse {
+    pub(crate) profile_id: String,
+    pub(crate) token: String,
+    pub(crate) previous_token_expires_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct LogsQuery {
     #[serde(default)]
@@ -186,6 +194,7 @@ pub(crate) struct PluginSchemaResponse {
 pub(crate) struct ProfileDto {
     pub(crate) profile: Profile,
     pub(crate) source_ids: Vec<String>,
+    pub(crate) export_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

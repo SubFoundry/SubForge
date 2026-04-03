@@ -70,4 +70,44 @@ impl<'a> ExportTokenRepository<'a> {
             Ok(exists)
         })
     }
+
+    pub fn rotate_primary_token_with_grace(
+        &self,
+        profile_id: &str,
+        new_token: &ExportToken,
+        grace_expires_at: &str,
+        now_rfc3339: &str,
+    ) -> StorageResult<()> {
+        self.db.with_connection(|connection| {
+            let tx = connection.transaction()?;
+            tx.execute(
+                "UPDATE export_tokens
+                 SET expires_at = ?1, token_type = 'grace'
+                 WHERE profile_id = ?2
+                   AND expires_at IS NULL",
+                params![grace_expires_at, profile_id],
+            )?;
+            tx.execute(
+                "INSERT INTO export_tokens (id, profile_id, token, token_type, created_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    new_token.id,
+                    new_token.profile_id,
+                    new_token.token,
+                    new_token.token_type,
+                    new_token.created_at,
+                    new_token.expires_at
+                ],
+            )?;
+            tx.execute(
+                "DELETE FROM export_tokens
+                 WHERE profile_id = ?1
+                   AND expires_at IS NOT NULL
+                   AND expires_at <= ?2",
+                params![profile_id, now_rfc3339],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
 }

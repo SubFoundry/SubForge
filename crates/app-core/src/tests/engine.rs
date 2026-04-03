@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 
 #[tokio::test]
 async fn engine_refresh_source_uses_profile_headers_from_plugin_manifest() {
@@ -369,6 +369,56 @@ fn engine_ensure_profile_export_token_is_idempotent() {
         .expect("读取 active token 失败")
         .expect("应存在 active token");
     assert_eq!(stored.token, token_a);
+
+    cleanup_dir(&temp_root);
+}
+
+#[test]
+fn engine_rotate_profile_export_token_keeps_grace_window() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let temp_root = create_temp_dir("engine-token-rotate");
+    let plugins_dir = temp_root.join("plugins");
+    fs::create_dir_all(&plugins_dir).expect("创建插件目录失败");
+    let profile_repository = app_storage::ProfileRepository::new(&db);
+    let profile = app_common::Profile {
+        id: "profile-engine-token-rotate".to_string(),
+        name: "Engine Token Rotate".to_string(),
+        description: None,
+        created_at: "2026-04-02T07:30:00Z".to_string(),
+        updated_at: "2026-04-02T07:30:00Z".to_string(),
+    };
+    profile_repository
+        .insert(&profile)
+        .expect("写入 profile 失败");
+
+    let secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
+    let engine = Engine::new(&db, &plugins_dir, Arc::clone(&secret_store));
+    let original = engine
+        .ensure_profile_export_token(&profile.id)
+        .expect("初始化 token 应成功");
+    let rotated = engine
+        .rotate_profile_export_token(&profile.id)
+        .expect("轮换 token 应成功");
+
+    assert_ne!(original, rotated.token);
+    assert_eq!(rotated.token.len(), 43);
+
+    let repository = ExportTokenRepository::new(&db);
+    let active = repository
+        .get_active_token(&profile.id)
+        .expect("读取 active token 失败")
+        .expect("轮换后应有 active token");
+    assert_eq!(active.token, rotated.token);
+    assert!(
+        repository
+            .is_valid_token(&profile.id, &original, "1970-01-01T00:00:00Z")
+            .expect("校验旧 token 失败")
+    );
+    assert!(
+        !repository
+            .is_valid_token(&profile.id, &original, &rotated.grace_expires_at)
+            .expect("校验旧 token 过期失败")
+    );
 
     cleanup_dir(&temp_root);
 }

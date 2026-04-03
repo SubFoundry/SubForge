@@ -5,7 +5,9 @@ use app_common::PluginType;
 use app_secrets::SecretStore;
 use app_storage::{Database, ExportToken, ExportTokenRepository, RefreshJob, RefreshJobRepository};
 use serde_json::Value;
+use time::Duration as TimeDuration;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::script_executor::ScriptExecutor;
 use crate::utils::{generate_secure_token, now_rfc3339};
@@ -24,6 +26,12 @@ pub struct SourceRefreshResult {
     pub source_id: String,
     pub node_count: usize,
     pub subscription_userinfo: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RotatedExportToken {
+    pub token: String,
+    pub grace_expires_at: String,
 }
 
 impl<'a> Engine<'a> {
@@ -148,5 +156,36 @@ impl<'a> Engine<'a> {
             expires_at: None,
         })?;
         Ok(token)
+    }
+
+    pub fn rotate_profile_export_token(&self, profile_id: &str) -> CoreResult<RotatedExportToken> {
+        let repository = ExportTokenRepository::new(self.db);
+        let now = OffsetDateTime::now_utc();
+        let created_at = now.format(&Rfc3339)?;
+        let grace_expires_at = (now + TimeDuration::minutes(10)).format(&Rfc3339)?;
+        let token = generate_secure_token()?;
+
+        let next = ExportToken {
+            id: format!(
+                "export-token-{}",
+                OffsetDateTime::now_utc().unix_timestamp_nanos()
+            ),
+            profile_id: profile_id.to_string(),
+            token: token.clone(),
+            token_type: "primary".to_string(),
+            created_at: created_at.clone(),
+            expires_at: None,
+        };
+        repository.rotate_primary_token_with_grace(
+            profile_id,
+            &next,
+            &grace_expires_at,
+            &created_at,
+        )?;
+
+        Ok(RotatedExportToken {
+            token,
+            grace_expires_at,
+        })
     }
 }

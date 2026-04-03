@@ -26,10 +26,11 @@ pub(crate) async fn list_profiles_handler(
     for profile in profiles {
         let source_ids = list_profile_source_ids(state.database.as_ref(), &profile.id)
             .map_err(storage_error_to_response)?;
-        items.push(ProfileDto {
+        items.push(build_profile_dto(
+            state.database.as_ref(),
             profile,
             source_ids,
-        });
+        )?);
     }
     Ok((
         StatusCode::OK,
@@ -69,10 +70,13 @@ pub(crate) async fn create_profile_handler(
         &state.plugins_dir,
         Arc::clone(&state.secret_store),
     );
-    if let Err(error) = engine.ensure_profile_export_token(&profile.id) {
-        let _ = repository.delete(&profile.id);
-        return Err(core_error_to_response(error));
-    }
+    let export_token = match engine.ensure_profile_export_token(&profile.id) {
+        Ok(token) => token,
+        Err(error) => {
+            let _ = repository.delete(&profile.id);
+            return Err(core_error_to_response(error));
+        }
+    };
 
     emit_event(
         &state,
@@ -86,6 +90,7 @@ pub(crate) async fn create_profile_handler(
             profile: ProfileDto {
                 profile,
                 source_ids: payload.source_ids,
+                export_token: Some(export_token),
             },
         }),
     ))
@@ -127,6 +132,7 @@ pub(crate) async fn update_profile_handler(
     };
 
     state.profile_cache.invalidate(&id);
+    let profile_dto = build_profile_dto(state.database.as_ref(), profile, source_ids)?;
     emit_event(
         &state,
         "profile:updated",
@@ -136,10 +142,7 @@ pub(crate) async fn update_profile_handler(
     Ok((
         StatusCode::OK,
         Json(ProfileResponse {
-            profile: ProfileDto {
-                profile,
-                source_ids,
-            },
+            profile: profile_dto,
         }),
     ))
 }
@@ -209,6 +212,46 @@ pub(crate) async fn refresh_profile_handler(
             profile_id: id,
             refreshed_sources: source_ids.len(),
             node_count,
+        }),
+    ))
+}
+
+pub(crate) async fn rotate_profile_export_token_handler(
+    State(state): State<ServerContext>,
+    AxumPath(profile_id): AxumPath<String>,
+) -> ApiResult<RotateProfileExportTokenResponse> {
+    let repository = ProfileRepository::new(state.database.as_ref());
+    if repository
+        .get_by_id(&profile_id)
+        .map_err(storage_error_to_response)?
+        .is_none()
+    {
+        return Err(not_found_error_response("Profile 不存在"));
+    }
+
+    let engine = Engine::new(
+        state.database.as_ref(),
+        &state.plugins_dir,
+        Arc::clone(&state.secret_store),
+    );
+    let rotated = engine
+        .rotate_profile_export_token(&profile_id)
+        .map_err(core_error_to_response)?;
+
+    state.profile_cache.invalidate(&profile_id);
+    emit_event(
+        &state,
+        "profile:token-rotated",
+        format!("Profile export token 已轮换：{profile_id}"),
+        None,
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(RotateProfileExportTokenResponse {
+            profile_id,
+            token: rotated.token,
+            previous_token_expires_at: rotated.grace_expires_at,
         }),
     ))
 }
@@ -494,4 +537,22 @@ fn nibble_to_hex(value: u8) -> char {
         0..=9 => char::from(b'0' + value),
         _ => char::from(b'A' + (value - 10)),
     }
+}
+
+fn build_profile_dto(
+    database: &app_storage::Database,
+    profile: Profile,
+    source_ids: Vec<String>,
+) -> Result<ProfileDto, (StatusCode, Json<ErrorResponse>)> {
+    let export_token_repository = ExportTokenRepository::new(database);
+    let export_token = export_token_repository
+        .get_active_token(&profile.id)
+        .map_err(storage_error_to_response)?
+        .map(|token| token.token);
+
+    Ok(ProfileDto {
+        profile,
+        source_ids,
+        export_token,
+    })
 }

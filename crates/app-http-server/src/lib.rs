@@ -19,8 +19,9 @@ use handlers::{
     get_profile_clash_handler, get_profile_raw_handler, get_profile_singbox_handler,
     get_system_settings_handler, get_system_status_handler, health_handler, import_plugin_handler,
     list_logs_handler, list_plugins_handler, list_profiles_handler, list_sources_handler,
-    refresh_profile_handler, refresh_source_handler, toggle_plugin_handler, update_profile_handler,
-    update_source_handler, update_system_settings_handler,
+    refresh_profile_handler, refresh_source_handler, rotate_profile_export_token_handler,
+    toggle_plugin_handler, update_profile_handler, update_source_handler,
+    update_system_settings_handler,
 };
 use middleware::{
     admin_auth_middleware, cors_reject_middleware, host_validation_middleware,
@@ -62,6 +63,10 @@ pub fn build_router(state: ServerContext) -> Router {
             put(update_profile_handler).delete(delete_profile_handler),
         )
         .route("/api/profiles/{id}/refresh", post(refresh_profile_handler))
+        .route(
+            "/api/tokens/{profile_id}/rotate",
+            post(rotate_profile_export_token_handler),
+        )
         .route("/api/profiles/{id}/clash", get(get_profile_clash_handler))
         .route(
             "/api/profiles/{id}/sing-box",

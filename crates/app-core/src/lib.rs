@@ -9,7 +9,7 @@ mod script_executor;
 mod source_service;
 mod utils;
 
-pub use engine::{Engine, SourceRefreshResult};
+pub use engine::{Engine, RotatedExportToken, SourceRefreshResult};
 pub use error::{CoreError, CoreResult};
 pub use fetcher::{FetchAndCacheResult, StaticFetcher};
 pub use parser::{SubscriptionParser, UriListParser};

@@ -228,3 +228,79 @@ fn export_token_repository_supports_active_and_expiring_tokens() -> StorageResul
 
     Ok(())
 }
+
+#[test]
+fn export_token_repository_rotates_primary_token_with_grace_window() -> StorageResult<()> {
+    let db = Database::open_in_memory()?;
+    let profile_repository = ProfileRepository::new(&db);
+    let token_repository = ExportTokenRepository::new(&db);
+    let profile = sample_profile("profile-rotate-token");
+    profile_repository.insert(&profile)?;
+
+    let initial = ExportToken {
+        id: "token-initial".to_string(),
+        profile_id: profile.id.clone(),
+        token: "token-initial-value".to_string(),
+        token_type: "primary".to_string(),
+        created_at: "2026-04-02T08:00:00Z".to_string(),
+        expires_at: None,
+    };
+    token_repository.insert(&initial)?;
+
+    let rotated = ExportToken {
+        id: "token-rotated".to_string(),
+        profile_id: profile.id.clone(),
+        token: "token-rotated-value".to_string(),
+        token_type: "primary".to_string(),
+        created_at: "2026-04-02T08:10:00Z".to_string(),
+        expires_at: None,
+    };
+    token_repository.rotate_primary_token_with_grace(
+        &profile.id,
+        &rotated,
+        "2026-04-02T08:20:00Z",
+        "2026-04-02T08:10:00Z",
+    )?;
+
+    let active = token_repository
+        .get_active_token(&profile.id)?
+        .expect("轮换后应存在 active token");
+    assert_eq!(active.token, rotated.token);
+    assert!(token_repository.is_valid_token(
+        &profile.id,
+        &initial.token,
+        "2026-04-02T08:15:00Z"
+    )?);
+    assert!(!token_repository.is_valid_token(
+        &profile.id,
+        &initial.token,
+        "2026-04-02T08:21:00Z"
+    )?);
+
+    let rotated_again = ExportToken {
+        id: "token-rotated-again".to_string(),
+        profile_id: profile.id.clone(),
+        token: "token-rotated-again-value".to_string(),
+        token_type: "primary".to_string(),
+        created_at: "2026-04-02T08:25:00Z".to_string(),
+        expires_at: None,
+    };
+    token_repository.rotate_primary_token_with_grace(
+        &profile.id,
+        &rotated_again,
+        "2026-04-02T08:35:00Z",
+        "2026-04-02T08:25:00Z",
+    )?;
+
+    let token_count: i64 = db.with_connection(|connection| {
+        let count = connection.query_row(
+            "SELECT COUNT(1) FROM export_tokens WHERE profile_id = ?1",
+            [profile.id.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    })?;
+    assert_eq!(token_count, 2, "应清理已过期的旧 token");
+
+    Ok(())
+}
