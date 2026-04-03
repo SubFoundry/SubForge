@@ -63,6 +63,22 @@ export default function RunsPage() {
   const hasPreviousPage = page > 1;
   const hasNextPage = pagination.hasMore;
 
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    if (!expandedId) {
+      return;
+    }
+    const expandedLog = logs.find((item) => item.id === expandedId);
+    if (!expandedLog || !hasRunDetails(expandedLog)) {
+      setExpandedId(null);
+    }
+  }, [expandedId, logs]);
+
   return (
     <section className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -180,7 +196,7 @@ function RunItem({
 }) {
   const durationText = formatDuration(log.startedAt, log.finishedAt);
   const hasScriptLogs = log.scriptLogs.length > 0;
-  const hasDetails = log.status === "failed" || hasScriptLogs;
+  const hasDetails = hasRunDetails(log);
   const statusClass =
     log.status === "success"
       ? "bg-emerald-500/20 text-emerald-300"
@@ -214,7 +230,7 @@ function RunItem({
           )}
         </div>
       </div>
-      {expanded && (
+      {expanded && hasDetails && (
         <div className="mt-3 space-y-2 text-xs">
           {log.status === "failed" && (
             <div className="rounded-md border border-rose-500/35 bg-rose-500/10 px-3 py-2">
@@ -255,6 +271,10 @@ function RunItem({
       )}
     </article>
   );
+}
+
+function hasRunDetails(log: RefreshLog): boolean {
+  return log.status === "failed" || log.scriptLogs.length > 0;
 }
 
 function formatTimestamp(value: string | null | undefined): string {
