@@ -13,6 +13,7 @@ permissions:
 
 env:
   RELEASE_ARTIFACT_RETENTION_DAYS: 14
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   quality-gate:
@@ -83,9 +84,17 @@ jobs:
       - name: Cargo clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Cargo audit
-        run: cargo audit
+        run: |
+          for attempt in 1 2 3; do
+            cargo audit && break
+            if [ "$attempt" -eq 3 ]; then
+              echo "cargo audit failed after ${attempt} attempts"
+              exit 1
+            fi
+            sleep $((attempt * 20))
+          done
       - name: Pnpm audit (high+)
-        run: pnpm audit --audit-level=high
+        run: pnpm audit --audit-level=high --registry https://registry.npmjs.org
 
   core-release:
     name: core-release-${{ matrix.os }}
