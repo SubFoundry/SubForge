@@ -13,12 +13,33 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::task::JoinHandle;
 
 const DEFAULT_CORE_HOST: &str = "127.0.0.1";
 const DEFAULT_CORE_PORT: u16 = 18118;
 const MAX_PLUGIN_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+const DEFAULT_GUI_CLOSE_BEHAVIOR: GuiCloseBehavior = GuiCloseBehavior::TrayMinimize;
+const SETTING_KEY_GUI_CLOSE_BEHAVIOR: &str = "gui_close_behavior";
+const SETTING_KEY_TRAY_MINIMIZE: &str = "tray_minimize";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuiCloseBehavior {
+    TrayMinimize,
+    CloseGui,
+    CloseGuiAndStopCore,
+}
+
+impl GuiCloseBehavior {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "tray_minimize" => Some(Self::TrayMinimize),
+            "close_gui" => Some(Self::CloseGui),
+            "close_gui_and_stop_core" => Some(Self::CloseGuiAndStopCore),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +71,11 @@ struct CoreApiResponse {
     status: u16,
     headers: BTreeMap<String, String>,
     body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SettingsResponse {
+    settings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -522,6 +548,35 @@ impl CoreManager {
         })
     }
 
+    async fn resolve_gui_close_behavior(&self) -> GuiCloseBehavior {
+        let settings = match self.fetch_system_settings().await {
+            Ok(settings) => settings,
+            Err(_) => return DEFAULT_GUI_CLOSE_BEHAVIOR,
+        };
+        parse_gui_close_behavior(&settings)
+    }
+
+    async fn fetch_system_settings(&self) -> Result<BTreeMap<String, String>> {
+        let response = self
+            .proxy_api_call(CoreApiRequest {
+                method: "GET".to_string(),
+                path: "/api/system/settings".to_string(),
+                body: None,
+            })
+            .await?;
+
+        if response.status != 200 {
+            return Err(anyhow!(
+                "读取 /api/system/settings 失败，HTTP 状态码: {}",
+                response.status
+            ));
+        }
+
+        let payload: SettingsResponse =
+            serde_json::from_str(&response.body).context("解析系统设置响应失败")?;
+        Ok(payload.settings)
+    }
+
     async fn wait_until_healthy(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -627,6 +682,12 @@ async fn core_events_start(
     manager
         .start_events_bridge(app_handle)
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn desktop_auto_close_gui(app_handle: AppHandle) -> Result<(), String> {
+    close_main_window(app_handle);
+    Ok(())
 }
 
 fn default_base_url() -> String {
@@ -767,6 +828,27 @@ fn build_plugin_multipart_body(boundary: &str, payload: &[u8], file_name: &str) 
     body
 }
 
+fn parse_gui_close_behavior(settings: &BTreeMap<String, String>) -> GuiCloseBehavior {
+    if let Some(raw_behavior) = settings.get(SETTING_KEY_GUI_CLOSE_BEHAVIOR) {
+        if let Some(parsed) = GuiCloseBehavior::parse(raw_behavior) {
+            return parsed;
+        }
+    }
+
+    if settings
+        .get(SETTING_KEY_TRAY_MINIMIZE)
+        .is_some_and(|value| parse_bool_setting(value))
+    {
+        return GuiCloseBehavior::TrayMinimize;
+    }
+
+    GuiCloseBehavior::CloseGui
+}
+
+fn parse_bool_setting(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("true")
+}
+
 fn terminate_child(child: &mut Child) -> Result<()> {
     #[cfg(unix)]
     {
@@ -800,18 +882,61 @@ fn terminate_child(child: &mut Child) -> Result<()> {
     Ok(())
 }
 
+async fn apply_main_window_close_behavior(app_handle: AppHandle) {
+    let manager = app_handle.state::<CoreManager>();
+    let behavior = manager.resolve_gui_close_behavior().await;
+
+    let Some(window) = app_handle.get_webview_window("main") else {
+        return;
+    };
+
+    match behavior {
+        GuiCloseBehavior::TrayMinimize => {
+            if window.minimize().is_err() {
+                let _ = window.hide();
+            }
+        }
+        GuiCloseBehavior::CloseGui => {
+            close_main_window(app_handle);
+        }
+        GuiCloseBehavior::CloseGuiAndStopCore => {
+            let _ = manager.stop_core().await;
+            close_main_window(app_handle);
+        }
+    }
+}
+
+fn close_main_window(app_handle: AppHandle) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.destroy();
+    }
+}
+
 fn main() {
     let manager = CoreManager::new().expect("初始化 CoreManager 失败");
 
     tauri::Builder::default()
         .manage(manager)
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let app_handle = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    apply_main_window_close_behavior(app_handle).await;
+                });
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             core_start,
             core_stop,
             core_status,
             core_api_call,
             core_import_plugin_zip,
-            core_events_start
+            core_events_start,
+            desktop_auto_close_gui
         ])
         .run(tauri::generate_context!())
         .expect("运行 SubForge Desktop 失败");

@@ -35,6 +35,10 @@ export async function coreEventsStart(): Promise<void> {
   await invoke("core_events_start");
 }
 
+export async function desktopAutoCloseGui(): Promise<void> {
+  await invoke("desktop_auto_close_gui");
+}
+
 export async function coreApiCall(
   method: string,
   path: string,

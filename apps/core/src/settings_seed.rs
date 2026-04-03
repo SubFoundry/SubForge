@@ -18,6 +18,8 @@ pub(crate) fn seed_default_settings(database: &Database, args: &RunArgs) -> Resu
         ("theme", "dark".to_string()),
         ("auto_refresh_on_start", "true".to_string()),
         ("tray_minimize", "true".to_string()),
+        ("gui_idle_auto_close_minutes", "30".to_string()),
+        ("gui_close_behavior", "tray_minimize".to_string()),
     ];
 
     for (key, value) in defaults {

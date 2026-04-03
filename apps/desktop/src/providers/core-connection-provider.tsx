@@ -3,14 +3,17 @@ import { type PropsWithChildren, useEffect, useRef } from "react";
 import {
   coreEventsStart,
   coreStart,
+  desktopAutoCloseGui,
   coreStatus,
   fetchCoreHealth,
   fetchSystemSettings,
 } from "../lib/api";
 import { useCoreUiStore } from "../stores/core-ui-store";
-import type { CoreBridgeEvent } from "../types/core";
+import type { CoreBridgeEvent, WindowCloseBehavior } from "../types/core";
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
+const IDLE_CHECK_INTERVAL_MS = 15_000;
+const DEFAULT_IDLE_AUTO_CLOSE_MINUTES = 30;
 
 export function CoreConnectionProvider({ children }: PropsWithChildren) {
   const setPhase = useCoreUiStore((state) => state.setPhase);
@@ -21,9 +24,18 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
   const pushEvent = useCoreUiStore((state) => state.pushEvent);
   const setLastRefreshAt = useCoreUiStore((state) => state.setLastRefreshAt);
   const setTheme = useCoreUiStore((state) => state.setTheme);
+  const idleAutoCloseMinutes = useCoreUiStore((state) => state.idleAutoCloseMinutes);
+  const setIdleAutoCloseMinutes = useCoreUiStore(
+    (state) => state.setIdleAutoCloseMinutes,
+  );
+  const setWindowCloseBehavior = useCoreUiStore(
+    (state) => state.setWindowCloseBehavior,
+  );
   const theme = useCoreUiStore((state) => state.theme);
   const addToast = useCoreUiStore((state) => state.addToast);
   const previousRunning = useRef<boolean>(false);
+  const lastActivityAt = useRef<number>(Date.now());
+  const idleCloseTriggered = useRef<boolean>(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -58,13 +70,26 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
 
           try {
             const settings = await fetchSystemSettings();
-            if (!cancelled && settings.settings.theme) {
-              setTheme(settings.settings.theme === "light" ? "light" : "dark");
+            if (!cancelled) {
+              if (settings.settings.theme) {
+                setTheme(settings.settings.theme === "light" ? "light" : "dark");
+              }
+              setIdleAutoCloseMinutes(
+                parseIdleAutoCloseMinutes(
+                  settings.settings.gui_idle_auto_close_minutes,
+                ),
+              );
+              setWindowCloseBehavior(
+                parseWindowCloseBehavior(
+                  settings.settings.gui_close_behavior,
+                  settings.settings.tray_minimize,
+                ),
+              );
             }
           } catch {
             addToast({
               title: "设置读取失败",
-              description: "已使用本地默认主题，稍后可在设置页重试。",
+              description: "已使用本地默认设置，稍后可在设置页重试。",
               variant: "warning",
             });
           }
@@ -90,7 +115,15 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
     return () => {
       cancelled = true;
     };
-  }, [addToast, setError, setPhase, setStatus, setTheme]);
+  }, [
+    addToast,
+    setError,
+    setIdleAutoCloseMinutes,
+    setPhase,
+    setStatus,
+    setTheme,
+    setWindowCloseBehavior,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -201,5 +234,92 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
     };
   }, [addToast, pushEvent, setError, setEventStreamActive, setLastRefreshAt]);
 
+  useEffect(() => {
+    const activityEvents: Array<keyof WindowEventMap> = [
+      "mousedown",
+      "mousemove",
+      "keydown",
+      "touchstart",
+      "wheel",
+      "scroll",
+    ];
+    const markActivity = () => {
+      lastActivityAt.current = Date.now();
+      idleCloseTriggered.current = false;
+    };
+
+    markActivity();
+    for (const eventName of activityEvents) {
+      window.addEventListener(eventName, markActivity, { passive: true });
+    }
+
+    return () => {
+      for (const eventName of activityEvents) {
+        window.removeEventListener(eventName, markActivity);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    idleCloseTriggered.current = false;
+    if (idleAutoCloseMinutes <= 0) {
+      return;
+    }
+
+    const thresholdMs = idleAutoCloseMinutes * 60_000;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden" || idleCloseTriggered.current) {
+        return;
+      }
+      const idleMs = Date.now() - lastActivityAt.current;
+      if (idleMs < thresholdMs) {
+        return;
+      }
+
+      idleCloseTriggered.current = true;
+      void desktopAutoCloseGui();
+    }, IDLE_CHECK_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [idleAutoCloseMinutes]);
+
   return children;
+}
+
+function parseIdleAutoCloseMinutes(rawValue: string | undefined): number {
+  if (!rawValue) {
+    return DEFAULT_IDLE_AUTO_CLOSE_MINUTES;
+  }
+
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 10_080) {
+    return DEFAULT_IDLE_AUTO_CLOSE_MINUTES;
+  }
+  return parsed;
+}
+
+function parseWindowCloseBehavior(
+  rawBehavior: string | undefined,
+  trayMinimizeLegacyFlag: string | undefined,
+): WindowCloseBehavior {
+  if (
+    rawBehavior === "tray_minimize" ||
+    rawBehavior === "close_gui" ||
+    rawBehavior === "close_gui_and_stop_core"
+  ) {
+    return rawBehavior;
+  }
+  if (parseBooleanSetting(trayMinimizeLegacyFlag)) {
+    return "tray_minimize";
+  }
+  return "close_gui";
+}
+
+function parseBooleanSetting(rawValue: string | undefined): boolean {
+  if (!rawValue) {
+    return false;
+  }
+  return rawValue.trim().toLowerCase() === "true";
 }

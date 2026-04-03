@@ -31,6 +31,11 @@ export type CoreBridgeEvent = {
   message?: string;
 };
 
+export type WindowCloseBehavior =
+  | "tray_minimize"
+  | "close_gui"
+  | "close_gui_and_stop_core";
+
 export type SettingsResponse = {
   settings: Record<string, string>;
 };

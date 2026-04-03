@@ -3,6 +3,7 @@ import type {
   CoreConnectionPhase,
   CoreEventPayload,
   CoreStatus,
+  WindowCloseBehavior,
 } from "../types/core";
 
 type CoreUiState = {
@@ -15,6 +16,8 @@ type CoreUiState = {
   eventHistory: CoreEventPayload[];
   lastRefreshAt: string | null;
   theme: "dark" | "light";
+  idleAutoCloseMinutes: number;
+  windowCloseBehavior: WindowCloseBehavior;
   toasts: ToastMessage[];
   setPhase: (phase: CoreConnectionPhase) => void;
   setStatus: (status: CoreStatus | null) => void;
@@ -24,6 +27,8 @@ type CoreUiState = {
   pushEvent: (event: CoreEventPayload) => void;
   setLastRefreshAt: (timestamp: string | null) => void;
   setTheme: (theme: "dark" | "light") => void;
+  setIdleAutoCloseMinutes: (minutes: number) => void;
+  setWindowCloseBehavior: (behavior: WindowCloseBehavior) => void;
   addToast: (toast: Omit<ToastMessage, "id">) => string;
   removeToast: (id: string) => void;
 };
@@ -45,6 +50,8 @@ export const useCoreUiStore = create<CoreUiState>((set) => ({
   eventHistory: [],
   lastRefreshAt: null,
   theme: "dark",
+  idleAutoCloseMinutes: 30,
+  windowCloseBehavior: "tray_minimize",
   toasts: [],
   setPhase: (phase) => set({ phase }),
   setStatus: (status) => set({ status }),
@@ -58,6 +65,8 @@ export const useCoreUiStore = create<CoreUiState>((set) => ({
     })),
   setLastRefreshAt: (lastRefreshAt) => set({ lastRefreshAt }),
   setTheme: (theme) => set({ theme }),
+  setIdleAutoCloseMinutes: (idleAutoCloseMinutes) => set({ idleAutoCloseMinutes }),
+  setWindowCloseBehavior: (windowCloseBehavior) => set({ windowCloseBehavior }),
   addToast: (toast) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     set((state) => ({ toasts: [...state.toasts, { ...toast, id }] }));
