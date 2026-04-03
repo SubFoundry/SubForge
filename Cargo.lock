@@ -187,6 +187,7 @@ dependencies = [
  "app-aggregator",
  "app-common",
  "app-core",
+ "app-plugin-runtime",
  "app-secrets",
  "app-storage",
  "app-transform",

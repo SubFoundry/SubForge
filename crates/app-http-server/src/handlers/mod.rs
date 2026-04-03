@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
-use app_common::{AppSetting, Plugin, Profile, ProxyNode, SourceInstance};
+use app_common::{AppSetting, ConfigSchema, Plugin, Profile, ProxyNode, SourceInstance};
 use app_core::{Engine, PluginInstallService, SourceService};
 use app_storage::{
     NodeCacheRepository, PluginRepository, ProfileRepository, RefreshJobRepository,
@@ -45,7 +45,8 @@ pub(crate) use events::events_handler;
 pub(crate) use health::health_handler;
 pub(crate) use logs::list_logs_handler;
 pub(crate) use plugins::{
-    delete_plugin_handler, import_plugin_handler, list_plugins_handler, toggle_plugin_handler,
+    delete_plugin_handler, get_plugin_schema_handler, import_plugin_handler, list_plugins_handler,
+    toggle_plugin_handler,
 };
 pub(crate) use profiles::{
     create_profile_handler, delete_profile_handler, get_profile_base64_handler,
@@ -137,7 +138,11 @@ pub(crate) struct LogsQuery {
     #[serde(default)]
     pub(crate) limit: Option<usize>,
     #[serde(default)]
+    pub(crate) offset: Option<usize>,
+    #[serde(default)]
     pub(crate) status: Option<String>,
+    #[serde(default)]
+    pub(crate) source_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +162,24 @@ pub(crate) struct RefreshLogDto {
 #[derive(Debug, Serialize)]
 pub(crate) struct LogsResponse {
     pub(crate) logs: Vec<RefreshLogDto>,
+    pub(crate) pagination: LogsPagination,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct LogsPagination {
+    pub(crate) limit: usize,
+    pub(crate) offset: usize,
+    pub(crate) total: usize,
+    pub(crate) has_more: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PluginSchemaResponse {
+    pub(crate) plugin_id: String,
+    pub(crate) name: String,
+    pub(crate) plugin_type: String,
+    pub(crate) secret_fields: Vec<String>,
+    pub(crate) schema: ConfigSchema,
 }
 
 #[derive(Debug, Clone, Serialize)]

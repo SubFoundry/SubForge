@@ -127,6 +127,61 @@ fn refresh_job_repository_records_success_and_failure() -> StorageResult<()> {
 }
 
 #[test]
+fn refresh_job_repository_supports_filtered_pagination() -> StorageResult<()> {
+    let db = Database::open_in_memory()?;
+    let source_repository = SourceRepository::new(&db);
+    let refresh_repository = RefreshJobRepository::new(&db);
+    let source_a = sample_source("source-refresh-a", "vendor.example.static");
+    let source_b = sample_source("source-refresh-b", "vendor.example.static");
+    source_repository.insert(&source_a)?;
+    source_repository.insert(&source_b)?;
+
+    for index in 0..5 {
+        let source_id = if index % 2 == 0 {
+            source_a.id.as_str()
+        } else {
+            source_b.id.as_str()
+        };
+        let status = if index % 3 == 0 { "failed" } else { "success" };
+        let started = format!("2026-04-02T06:1{index}:00Z");
+        let finished = format!("2026-04-02T06:1{index}:30Z");
+
+        let job = RefreshJob {
+            id: format!("refresh-filter-{index}"),
+            source_instance_id: source_id.to_string(),
+            trigger_type: "manual".to_string(),
+            status: status.to_string(),
+            started_at: Some(started),
+            finished_at: Some(finished),
+            node_count: Some((10 + index) as i64),
+            error_code: (status == "failed").then(|| "E_HTTP_5XX".to_string()),
+            error_message: (status == "failed").then(|| "upstream 502".to_string()),
+        };
+        refresh_repository.insert(&job)?;
+    }
+
+    let page = refresh_repository.list_recent_filtered(None, None, 2, 1)?;
+    assert_eq!(page.len(), 2);
+    assert_eq!(page[0].id, "refresh-filter-3");
+    assert_eq!(page[1].id, "refresh-filter-2");
+
+    let failed_for_source_a =
+        refresh_repository.list_recent_filtered(Some("failed"), Some(&source_a.id), 10, 0)?;
+    assert_eq!(failed_for_source_a.len(), 1);
+    assert_eq!(failed_for_source_a[0].source_instance_id, source_a.id);
+    assert_eq!(failed_for_source_a[0].status, "failed");
+
+    assert_eq!(refresh_repository.count_filtered(None, None)?, 5);
+    assert_eq!(refresh_repository.count_filtered(Some("failed"), None)?, 2);
+    assert_eq!(
+        refresh_repository.count_filtered(Some("success"), Some(&source_b.id))?,
+        1
+    );
+
+    Ok(())
+}
+
+#[test]
 fn export_token_repository_supports_active_and_expiring_tokens() -> StorageResult<()> {
     let db = Database::open_in_memory()?;
     let profile_repository = ProfileRepository::new(&db);

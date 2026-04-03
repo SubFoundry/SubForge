@@ -42,6 +42,30 @@ async fn e2e_import_source_refresh_and_raw_profile_output() {
         .expect("导入插件请求执行失败");
     assert_eq!(import_response.status(), StatusCode::CREATED);
 
+    let plugin_schema_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::GET,
+            "/api/plugins/subforge.builtin.static/schema",
+            Body::empty(),
+        ))
+        .await
+        .expect("读取插件 schema 请求执行失败");
+    assert_eq!(plugin_schema_response.status(), StatusCode::OK);
+    let plugin_schema_payload = read_json(plugin_schema_response).await;
+    assert_eq!(
+        plugin_schema_payload
+            .get("plugin_id")
+            .and_then(Value::as_str),
+        Some("subforge.builtin.static")
+    );
+    assert_eq!(
+        plugin_schema_payload
+            .pointer("/schema/type")
+            .and_then(Value::as_str),
+        Some("object")
+    );
+
     let source_response = app
         .clone()
         .oneshot(admin_json_request(
@@ -188,6 +212,24 @@ async fn e2e_import_source_refresh_and_raw_profile_output() {
         .and_then(Value::as_array)
         .expect("logs 响应缺少数组字段");
     assert!(!logs.is_empty());
+    assert_eq!(
+        logs_payload
+            .pointer("/pagination/limit")
+            .and_then(Value::as_u64),
+        Some(5)
+    );
+    assert_eq!(
+        logs_payload
+            .pointer("/pagination/offset")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert!(
+        logs_payload
+            .pointer("/pagination/total")
+            .and_then(Value::as_u64)
+            .is_some()
+    );
     assert!(logs.iter().any(|entry| {
         entry.get("source_id").and_then(Value::as_str) == Some(source_id.as_str())
             && entry.get("status").and_then(Value::as_str) == Some("success")
@@ -223,6 +265,39 @@ async fn e2e_import_source_refresh_and_raw_profile_output() {
         failed_logs.iter().any(|entry| {
             entry.get("source_name").and_then(Value::as_str) == Some("E2E Source")
         })
+    );
+    assert_eq!(
+        failed_logs_payload
+            .pointer("/pagination/limit")
+            .and_then(Value::as_u64),
+        Some(5)
+    );
+
+    let filtered_logs_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::GET,
+            &format!("/api/logs?status=failed&source_id={source_id}&limit=1&offset=0"),
+            Body::empty(),
+        ))
+        .await
+        .expect("读取按来源过滤 logs 失败");
+    assert_eq!(filtered_logs_response.status(), StatusCode::OK);
+    let filtered_logs_payload = read_json(filtered_logs_response).await;
+    let filtered_logs = filtered_logs_payload
+        .get("logs")
+        .and_then(Value::as_array)
+        .expect("filtered logs 响应缺少数组字段");
+    assert_eq!(filtered_logs.len(), 1);
+    assert!(filtered_logs.iter().all(|entry| {
+        entry.get("source_id").and_then(Value::as_str) == Some(source_id.as_str())
+            && entry.get("status").and_then(Value::as_str) == Some("failed")
+    }));
+    assert_eq!(
+        filtered_logs_payload
+            .pointer("/pagination/offset")
+            .and_then(Value::as_u64),
+        Some(0)
     );
 
     let event = wait_refresh_complete_event(&mut event_receiver, &source_id).await;

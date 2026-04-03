@@ -13,6 +13,7 @@ pub(crate) async fn list_logs_handler(
     if limit == 0 || limit > MAX_LOG_LIMIT {
         return Err(config_error_response("limit 必须在 1..=200 之间"));
     }
+    let offset = query.offset.unwrap_or(0);
 
     let status_filter = query
         .status
@@ -26,19 +27,32 @@ pub(crate) async fn list_logs_handler(
             "status 仅支持 running/success/failed",
         ));
     }
+    let source_id_filter = query
+        .source_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     let refresh_repository = RefreshJobRepository::new(state.database.as_ref());
     let source_repository = SourceRepository::new(state.database.as_ref());
 
-    let refresh_jobs = if let Some(status) = status_filter {
+    let refresh_jobs = if source_id_filter.is_none() && offset == 0 && status_filter.is_some() {
+        let status = status_filter.expect("status_filter 已检查为 Some");
         refresh_repository
             .list_recent_by_status(status, limit)
             .map_err(storage_error_to_response)?
-    } else {
+    } else if source_id_filter.is_none() && offset == 0 && status_filter.is_none() {
         refresh_repository
             .list_recent(limit)
             .map_err(storage_error_to_response)?
+    } else {
+        refresh_repository
+            .list_recent_filtered(status_filter, source_id_filter, limit, offset)
+            .map_err(storage_error_to_response)?
     };
+    let total = refresh_repository
+        .count_filtered(status_filter, source_id_filter)
+        .map_err(storage_error_to_response)?;
 
     let source_names = source_repository
         .list()
@@ -63,5 +77,16 @@ pub(crate) async fn list_logs_handler(
         })
         .collect();
 
-    Ok((StatusCode::OK, Json(LogsResponse { logs })))
+    Ok((
+        StatusCode::OK,
+        Json(LogsResponse {
+            logs,
+            pagination: LogsPagination {
+                limit,
+                offset,
+                total,
+                has_more: offset.saturating_add(limit) < total,
+            },
+        }),
+    ))
 }

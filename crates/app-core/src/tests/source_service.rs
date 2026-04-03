@@ -120,3 +120,49 @@ fn delete_source_cleans_plugin_secret() {
     assert_eq!(error.code(), "E_SECRET_MISSING");
     cleanup_dir(&temp_root);
 }
+
+#[test]
+fn update_source_config_allows_secret_placeholder_to_keep_existing_secret() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let temp_root = create_temp_dir("source-update-secret-placeholder");
+    let plugins_dir = temp_root.join("plugins");
+    let plugin_source_dir = create_secret_static_plugin_dir(&temp_root);
+    let install_service = PluginInstallService::new(&db, &plugins_dir);
+    install_service
+        .install_from_dir(&plugin_source_dir)
+        .expect("安装带密钥字段插件应成功");
+
+    let secret_store = MemorySecretStore::new();
+    let source_service = SourceService::new(&db, &plugins_dir, &secret_store);
+    let mut create_config = BTreeMap::new();
+    create_config.insert("url".to_string(), json!("https://example.com/a"));
+    create_config.insert("token".to_string(), json!("token-initial"));
+    create_config.insert("region".to_string(), json!("hk"));
+    let created = source_service
+        .create_source("vendor.example.secure-static", "Source A", create_config)
+        .expect("创建来源应成功");
+
+    let mut update_config = BTreeMap::new();
+    update_config.insert("url".to_string(), json!("https://example.com/b"));
+    update_config.insert("token".to_string(), json!("••••••"));
+    update_config.insert("region".to_string(), json!("sg"));
+
+    let updated = source_service
+        .update_source_config(&created.source.id, update_config)
+        .expect("使用占位符更新来源应成功");
+    assert_eq!(
+        updated.config.get("token"),
+        Some(&Value::String("••••••".to_string()))
+    );
+    assert_eq!(
+        updated.config.get("region"),
+        Some(&Value::String("sg".to_string()))
+    );
+
+    let secret = secret_store
+        .get("plugin:vendor.example.secure-static", "token")
+        .expect("secret 应保留");
+    assert_eq!(secret.as_str(), "token-initial");
+
+    cleanup_dir(&temp_root);
+}

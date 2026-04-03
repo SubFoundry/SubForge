@@ -47,14 +47,14 @@ export default function DashboardPage() {
 
   const recentLogsQuery = useQuery({
     queryKey: ["dashboard-logs", "recent"],
-    queryFn: () => fetchRefreshLogs(10),
+    queryFn: () => fetchRefreshLogs({ limit: 10 }),
     refetchInterval: 15_000,
     enabled: status?.running === true,
   });
 
   const recentErrorLogsQuery = useQuery({
     queryKey: ["dashboard-logs", "failed"],
-    queryFn: () => fetchRefreshLogs(5, "failed"),
+    queryFn: () => fetchRefreshLogs({ limit: 5, status: "failed" }),
     refetchInterval: 15_000,
     enabled: status?.running === true,
   });

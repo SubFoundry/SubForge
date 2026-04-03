@@ -1,4 +1,5 @@
 use super::*;
+use app_plugin_runtime::PluginLoader;
 
 pub(crate) async fn list_plugins_handler(
     State(state): State<ServerContext>,
@@ -147,4 +148,37 @@ pub(crate) async fn toggle_plugin_handler(
     );
 
     Ok((StatusCode::OK, Json(updated)))
+}
+
+pub(crate) async fn get_plugin_schema_handler(
+    State(state): State<ServerContext>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<PluginSchemaResponse> {
+    let repository = PluginRepository::new(state.database.as_ref());
+    let plugin = load_plugin_by_route_id(&repository, &id)
+        .map_err(storage_error_to_response)?
+        .ok_or_else(|| not_found_error_response("插件不存在"))?;
+
+    let plugin_dir = state.plugins_dir.join(&plugin.plugin_id);
+    let loaded = PluginLoader::new()
+        .load_from_dir(plugin_dir)
+        .map_err(|error| {
+            error_response(
+                StatusCode::BAD_REQUEST,
+                "E_PLUGIN_INVALID",
+                error.to_string(),
+                false,
+            )
+        })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(PluginSchemaResponse {
+            plugin_id: plugin.plugin_id,
+            name: plugin.name,
+            plugin_type: plugin.plugin_type,
+            secret_fields: loaded.manifest.secret_fields,
+            schema: loaded.schema,
+        }),
+    ))
 }

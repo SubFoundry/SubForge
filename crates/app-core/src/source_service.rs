@@ -154,12 +154,13 @@ impl<'a> SourceService<'a> {
             .get_by_id(source_id)?
             .ok_or_else(|| CoreError::SourceNotFound(source_id.to_string()))?;
         let loaded = self.load_installed_plugin(&source.plugin_id)?;
-        let prepared = self.validate_and_split_config(&loaded, &config)?;
         let config_repository = SourceConfigRepository::new(self.db);
         let previous_non_secret = config_repository.get_all(&source.id)?;
         let scope = plugin_scope(&source.plugin_id);
         let previous_secret =
             self.snapshot_secret_values(&scope, &loaded.manifest.secret_fields)?;
+        let effective_config = self.apply_secret_placeholders(&loaded, config, &previous_secret)?;
+        let prepared = self.validate_and_split_config(&loaded, &effective_config)?;
 
         if let Err(error) =
             self.persist_source_config(&source, &loaded, &prepared, &config_repository, true)
@@ -408,6 +409,35 @@ impl<'a> SourceService<'a> {
             }
         }
         Ok(snapshot)
+    }
+
+    fn apply_secret_placeholders(
+        &self,
+        loaded: &LoadedPlugin,
+        mut config: BTreeMap<String, Value>,
+        previous_secret: &BTreeMap<String, String>,
+    ) -> CoreResult<BTreeMap<String, Value>> {
+        for secret_key in &loaded.manifest.secret_fields {
+            let is_placeholder = config
+                .get(secret_key)
+                .is_some_and(|value| value.as_str() == Some(SECRET_PLACEHOLDER));
+            if !is_placeholder {
+                continue;
+            }
+
+            let Some(secret_raw) = previous_secret.get(secret_key) else {
+                return Err(CoreError::ConfigInvalid(format!(
+                    "字段 {secret_key} 尚未设置，不能使用占位符"
+                )));
+            };
+            let property = loaded.schema.properties.get(secret_key).ok_or_else(|| {
+                CoreError::ConfigInvalid(format!("schema 中缺少字段：{secret_key}"))
+            })?;
+            let inflated = inflate_typed_value(secret_key, property, secret_raw)?;
+            config.insert(secret_key.clone(), inflated);
+        }
+
+        Ok(config)
     }
 
     fn restore_secret_values(

@@ -1,15 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ConfigSchema,
   CoreApiResponse,
   CoreStatus,
   LogsResponse,
   PluginListResponse,
   PluginRecord,
+  PluginSchemaResponse,
   RefreshAllSourcesResult,
   RefreshLog,
   RefreshSourceResponse,
   SettingsResponse,
   SourceListResponse,
+  SourceResponse,
   SystemStatusResponse,
 } from "../types/core";
 
@@ -79,6 +82,88 @@ export async function fetchPlugins(): Promise<PluginListResponse> {
   return requestJson<PluginListResponse>("GET", "/api/plugins");
 }
 
+export async function fetchPluginSchema(
+  pluginId: string,
+): Promise<PluginSchemaResponse> {
+  const payload = await requestJson<{
+    plugin_id: string;
+    name: string;
+    plugin_type: string;
+    secret_fields?: string[];
+    schema: {
+      $schema?: string;
+      type: string;
+      required?: string[];
+      properties?: Record<
+        string,
+        {
+          type: string;
+          title?: string;
+          description?: string;
+          default?: unknown;
+          enum?: unknown[];
+          format?: string;
+          minLength?: number;
+          maxLength?: number;
+          minimum?: number;
+          maximum?: number;
+          pattern?: string;
+          "x-ui"?: {
+            widget?: string;
+            placeholder?: string;
+            help?: string;
+            group?: string;
+            order?: number;
+          };
+        }
+      >;
+      additionalProperties?: boolean;
+    };
+  }>("GET", `/api/plugins/${encodeURIComponent(pluginId)}/schema`);
+
+  const schema: ConfigSchema = {
+    schema: payload.schema.$schema,
+    schema_type: payload.schema.type,
+    required: payload.schema.required ?? [],
+    properties: Object.fromEntries(
+      Object.entries(payload.schema.properties ?? {}).map(([fieldName, property]) => [
+        fieldName,
+        {
+          property_type: property.type,
+          title: property.title,
+          description: property.description,
+          default: property.default,
+          enum_values: property.enum,
+          format: property.format,
+          min_length: property.minLength,
+          max_length: property.maxLength,
+          minimum: property.minimum,
+          maximum: property.maximum,
+          pattern: property.pattern,
+          x_ui: property["x-ui"]
+            ? {
+                widget: property["x-ui"].widget,
+                placeholder: property["x-ui"].placeholder,
+                help: property["x-ui"].help,
+                group: property["x-ui"].group,
+                order: property["x-ui"].order,
+              }
+            : undefined,
+        },
+      ]),
+    ),
+    additional_properties: payload.schema.additionalProperties,
+  };
+
+  return {
+    plugin_id: payload.plugin_id,
+    name: payload.name,
+    plugin_type: payload.plugin_type,
+    secret_fields: payload.secret_fields ?? [],
+    schema,
+  };
+}
+
 export async function togglePlugin(
   pluginId: string,
   enabled: boolean,
@@ -113,6 +198,39 @@ export async function fetchSources(): Promise<SourceListResponse> {
   return requestJson<SourceListResponse>("GET", "/api/sources");
 }
 
+export async function createSource(input: {
+  pluginId: string;
+  name: string;
+  config: Record<string, unknown>;
+}): Promise<SourceResponse> {
+  return requestJson<SourceResponse>("POST", "/api/sources", {
+    plugin_id: input.pluginId,
+    name: input.name,
+    config: input.config,
+  });
+}
+
+export async function updateSource(
+  sourceId: string,
+  input: {
+    name?: string;
+    config?: Record<string, unknown>;
+  },
+): Promise<SourceResponse> {
+  return requestJson<SourceResponse>(
+    "PUT",
+    `/api/sources/${encodeURIComponent(sourceId)}`,
+    input,
+  );
+}
+
+export async function deleteSource(sourceId: string): Promise<{ deleted: boolean; id: string }> {
+  return requestJson<{ deleted: boolean; id: string }>(
+    "DELETE",
+    `/api/sources/${encodeURIComponent(sourceId)}`,
+  );
+}
+
 export async function refreshSource(sourceId: string): Promise<RefreshSourceResponse> {
   return requestJson<RefreshSourceResponse>("POST", `/api/sources/${sourceId}/refresh`);
 }
@@ -143,13 +261,25 @@ export async function refreshAllSources(): Promise<RefreshAllSourcesResult> {
 }
 
 export async function fetchRefreshLogs(
-  limit = 20,
-  status?: "running" | "success" | "failed",
+  options?: {
+    limit?: number;
+    offset?: number;
+    status?: "running" | "success" | "failed";
+    sourceId?: string;
+  },
 ): Promise<LogsResponse> {
+  const limit = options?.limit ?? 20;
+  const offset = options?.offset ?? 0;
+  const status = options?.status;
+  const sourceId = options?.sourceId;
   const params = new URLSearchParams();
   params.set("limit", String(limit));
+  params.set("offset", String(offset));
   if (status) {
     params.set("status", status);
+  }
+  if (sourceId) {
+    params.set("source_id", sourceId);
   }
   const payload = await requestJson<{
     logs: Array<{
@@ -164,6 +294,12 @@ export async function fetchRefreshLogs(
       error_code?: string | null;
       error_message?: string | null;
     }>;
+    pagination?: {
+      limit: number;
+      offset: number;
+      total: number;
+      has_more: boolean;
+    };
   }>("GET", `/api/logs?${params.toString()}`);
 
   const logs: RefreshLog[] = payload.logs.map((item) => ({
@@ -179,7 +315,15 @@ export async function fetchRefreshLogs(
     errorMessage: item.error_message ?? null,
   }));
 
-  return { logs };
+  return {
+    logs,
+    pagination: {
+      limit: payload.pagination?.limit ?? limit,
+      offset: payload.pagination?.offset ?? offset,
+      total: payload.pagination?.total ?? logs.length,
+      hasMore: payload.pagination?.has_more ?? false,
+    },
+  };
 }
 
 async function requestJson<T>(

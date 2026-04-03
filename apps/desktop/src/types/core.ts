@@ -51,6 +51,45 @@ export type PluginListResponse = {
   plugins: PluginRecord[];
 };
 
+export type ConfigSchemaUi = {
+  widget?: string;
+  placeholder?: string;
+  help?: string;
+  group?: string;
+  order?: number;
+};
+
+export type ConfigSchemaProperty = {
+  property_type: "string" | "number" | "integer" | "boolean" | string;
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum_values?: unknown[] | null;
+  format?: string;
+  min_length?: number;
+  max_length?: number;
+  minimum?: number;
+  maximum?: number;
+  pattern?: string;
+  x_ui?: ConfigSchemaUi;
+};
+
+export type ConfigSchema = {
+  schema?: string;
+  schema_type: "object" | string;
+  required: string[];
+  properties: Record<string, ConfigSchemaProperty>;
+  additional_properties?: boolean;
+};
+
+export type PluginSchemaResponse = {
+  plugin_id: string;
+  name: string;
+  plugin_type: string;
+  secret_fields: string[];
+  schema: ConfigSchema;
+};
+
 export type SourceRecord = {
   id: string;
   plugin_id: string;
@@ -66,6 +105,13 @@ export type SourceListResponse = {
     source: SourceRecord;
     config: Record<string, unknown>;
   }>;
+};
+
+export type SourceResponse = {
+  source: {
+    source: SourceRecord;
+    config: Record<string, unknown>;
+  };
 };
 
 export type RefreshSourceResponse = {
@@ -100,4 +146,10 @@ export type RefreshLog = {
 
 export type LogsResponse = {
   logs: RefreshLog[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+    hasMore: boolean;
+  };
 };
