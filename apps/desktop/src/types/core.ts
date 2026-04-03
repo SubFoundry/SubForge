@@ -35,6 +35,22 @@ export type SettingsResponse = {
   settings: Record<string, string>;
 };
 
+export type PluginRecord = {
+  id: string;
+  plugin_id: string;
+  name: string;
+  version: string;
+  spec_version: string;
+  plugin_type: string;
+  status: "enabled" | "disabled" | string;
+  installed_at: string;
+  updated_at: string;
+};
+
+export type PluginListResponse = {
+  plugins: PluginRecord[];
+};
+
 export type SourceRecord = {
   id: string;
   plugin_id: string;

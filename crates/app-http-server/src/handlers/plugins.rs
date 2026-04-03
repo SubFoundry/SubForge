@@ -109,3 +109,42 @@ pub(crate) async fn delete_plugin_handler(
     );
     Ok((StatusCode::OK, Json(plugin)))
 }
+
+pub(crate) async fn toggle_plugin_handler(
+    State(state): State<ServerContext>,
+    AxumPath(id): AxumPath<String>,
+    Json(payload): Json<TogglePluginRequest>,
+) -> ApiResult<Plugin> {
+    let repository = PluginRepository::new(state.database.as_ref());
+    let plugin = load_plugin_by_route_id(&repository, &id)
+        .map_err(storage_error_to_response)?
+        .ok_or_else(|| not_found_error_response("插件不存在"))?;
+
+    let target_status = if payload.enabled {
+        "enabled"
+    } else {
+        "disabled"
+    };
+
+    if plugin.status != target_status {
+        let updated_at = current_timestamp_rfc3339().map_err(|_| internal_error_response())?;
+        repository
+            .update_status(&plugin.id, target_status, &updated_at)
+            .map_err(storage_error_to_response)?;
+    }
+
+    let updated = repository
+        .get_by_id(&plugin.id)
+        .map_err(storage_error_to_response)?
+        .ok_or_else(|| internal_error_response())?;
+
+    let action = if payload.enabled { "启用" } else { "禁用" };
+    emit_event(
+        &state,
+        "plugin:toggled",
+        format!("插件已{action}：{}", updated.plugin_id),
+        None,
+    );
+
+    Ok((StatusCode::OK, Json(updated)))
+}

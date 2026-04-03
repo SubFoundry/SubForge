@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,6 +18,7 @@ use tokio::task::JoinHandle;
 
 const DEFAULT_CORE_HOST: &str = "127.0.0.1";
 const DEFAULT_CORE_PORT: u16 = 18118;
+const MAX_PLUGIN_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +35,13 @@ struct CoreApiRequest {
     method: String,
     path: String,
     body: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginImportRequest {
+    file_name: String,
+    payload_base64: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -444,6 +454,74 @@ impl CoreManager {
         })
     }
 
+    async fn import_plugin_zip(&self, request: PluginImportRequest) -> Result<CoreApiResponse> {
+        if !request.file_name.to_ascii_lowercase().ends_with(".zip") {
+            return Err(anyhow!("仅支持 .zip 插件包"));
+        }
+
+        let payload = BASE64_STANDARD
+            .decode(request.payload_base64.as_bytes())
+            .context("解析插件包内容失败（Base64）")?;
+        if payload.len() > MAX_PLUGIN_UPLOAD_BYTES {
+            return Err(anyhow!(
+                "插件包超过大小限制：{} bytes",
+                MAX_PLUGIN_UPLOAD_BYTES
+            ));
+        }
+
+        let (base_url, admin_token) = {
+            let mut state = self.lock_state()?;
+            self.reap_child_if_exited(&mut state)?;
+            (state.base_url.clone(), state.admin_token.clone())
+        };
+
+        if self.fetch_health_version(&base_url).await.is_none() {
+            return Err(anyhow!("Core 未运行或不可达"));
+        }
+
+        let token = admin_token.ok_or_else(|| {
+            anyhow!("当前会话没有管理 token，请先通过 GUI 启动 Core 再调用管理 API")
+        })?;
+
+        let boundary_seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let boundary = format!("----subforge-desktop-{boundary_seed}");
+        let multipart_body = build_plugin_multipart_body(&boundary, &payload, &request.file_name);
+        let response = self
+            .client
+            .request(Method::POST, format!("{base_url}/api/plugins/import"))
+            .bearer_auth(token)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(multipart_body)
+            .send()
+            .await
+            .context("调用 Core 插件导入接口失败")?;
+
+        let status = response.status().as_u16();
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(key, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (key.to_string(), v.to_string()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let body = response.text().await.context("读取插件导入响应失败")?;
+
+        Ok(CoreApiResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+
     async fn wait_until_healthy(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -526,6 +604,17 @@ async fn core_api_call(
 ) -> Result<CoreApiResponse, String> {
     manager
         .proxy_api_call(request)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn core_import_plugin_zip(
+    manager: State<'_, CoreManager>,
+    request: PluginImportRequest,
+) -> Result<CoreApiResponse, String> {
+    manager
+        .import_plugin_zip(request)
         .await
         .map_err(|err| err.to_string())
 }
@@ -658,6 +747,26 @@ fn normalize_path(path: &str) -> String {
     }
 }
 
+fn build_plugin_multipart_body(boundary: &str, payload: &[u8], file_name: &str) -> Vec<u8> {
+    let safe_file_name = file_name
+        .replace('\r', "_")
+        .replace('\n', "_")
+        .replace('"', "_");
+
+    let mut body = Vec::new();
+    write!(body, "--{boundary}\r\n").expect("写入 multipart 边界失败");
+    write!(
+        body,
+        "Content-Disposition: form-data; name=\"file\"; filename=\"{safe_file_name}\"\r\n"
+    )
+    .expect("写入 multipart disposition 失败");
+    write!(body, "Content-Type: application/zip\r\n\r\n")
+        .expect("写入 multipart content-type 失败");
+    body.extend_from_slice(payload);
+    write!(body, "\r\n--{boundary}--\r\n").expect("写入 multipart 结束边界失败");
+    body
+}
+
 fn terminate_child(child: &mut Child) -> Result<()> {
     #[cfg(unix)]
     {
@@ -701,6 +810,7 @@ fn main() {
             core_stop,
             core_status,
             core_api_call,
+            core_import_plugin_zip,
             core_events_start
         ])
         .run(tauri::generate_context!())

@@ -689,3 +689,125 @@ async fn e2e_script_source_refresh_via_management_api() {
 
     server_task.abort();
 }
+
+#[tokio::test]
+async fn e2e_plugin_toggle_and_delete_workflow() {
+    let state = build_test_state();
+    let app = build_router(state);
+
+    let boundary = "----subforge-e2e-plugin-toggle-boundary";
+    let plugin_zip = build_builtin_plugin_zip_bytes();
+    let import_body = build_multipart_plugin_body(boundary, &plugin_zip, "builtin-static.zip");
+    let import_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/plugins/import")
+                .header(HOST, "127.0.0.1:18118")
+                .header("authorization", "Bearer test-admin-token")
+                .header(
+                    CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(import_body))
+                .expect("构建插件导入请求失败"),
+        )
+        .await
+        .expect("导入插件请求执行失败");
+    assert_eq!(import_response.status(), StatusCode::CREATED);
+    let import_payload = read_json(import_response).await;
+    let plugin_id = import_payload
+        .get("id")
+        .and_then(Value::as_str)
+        .expect("导入响应缺少插件 id")
+        .to_string();
+
+    let disable_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::PUT,
+            &format!("/api/plugins/{plugin_id}/toggle"),
+            &json!({ "enabled": false }),
+        ))
+        .await
+        .expect("禁用插件请求执行失败");
+    assert_eq!(disable_response.status(), StatusCode::OK);
+    let disabled_payload = read_json(disable_response).await;
+    assert_eq!(
+        disabled_payload.get("status").and_then(Value::as_str),
+        Some("disabled")
+    );
+
+    let enable_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::PUT,
+            &format!("/api/plugins/{plugin_id}/toggle"),
+            &json!({ "enabled": true }),
+        ))
+        .await
+        .expect("启用插件请求执行失败");
+    assert_eq!(enable_response.status(), StatusCode::OK);
+    let enabled_payload = read_json(enable_response).await;
+    assert_eq!(
+        enabled_payload.get("status").and_then(Value::as_str),
+        Some("enabled")
+    );
+
+    let source_response = app
+        .clone()
+        .oneshot(admin_json_request(
+            Method::POST,
+            "/api/sources",
+            &json!({
+                "plugin_id": "subforge.builtin.static",
+                "name": "Plugin Toggle Source",
+                "config": {
+                    "url": "https://example.com/subscription"
+                }
+            }),
+        ))
+        .await
+        .expect("创建来源请求执行失败");
+    assert_eq!(source_response.status(), StatusCode::CREATED);
+    let source_payload = read_json(source_response).await;
+    let source_id = source_payload
+        .pointer("/source/source/id")
+        .and_then(Value::as_str)
+        .expect("来源响应缺少 source.id")
+        .to_string();
+
+    let delete_conflict = app
+        .clone()
+        .oneshot(admin_request(
+            Method::DELETE,
+            &format!("/api/plugins/{plugin_id}"),
+            Body::empty(),
+        ))
+        .await
+        .expect("删除插件冲突请求执行失败");
+    assert_eq!(delete_conflict.status(), StatusCode::CONFLICT);
+
+    let delete_source_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::DELETE,
+            &format!("/api/sources/{source_id}"),
+            Body::empty(),
+        ))
+        .await
+        .expect("删除来源请求执行失败");
+    assert_eq!(delete_source_response.status(), StatusCode::OK);
+
+    let delete_plugin_response = app
+        .clone()
+        .oneshot(admin_request(
+            Method::DELETE,
+            &format!("/api/plugins/{plugin_id}"),
+            Body::empty(),
+        ))
+        .await
+        .expect("删除插件请求执行失败");
+    assert_eq!(delete_plugin_response.status(), StatusCode::OK);
+}

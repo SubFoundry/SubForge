@@ -3,6 +3,8 @@ import type {
   CoreApiResponse,
   CoreStatus,
   LogsResponse,
+  PluginListResponse,
+  PluginRecord,
   RefreshAllSourcesResult,
   RefreshLog,
   RefreshSourceResponse,
@@ -71,6 +73,40 @@ export async function fetchSystemStatus(): Promise<SystemStatusResponse> {
     totalNodes: payload.total_nodes,
     lastRefreshAt: payload.last_refresh_at ?? null,
   };
+}
+
+export async function fetchPlugins(): Promise<PluginListResponse> {
+  return requestJson<PluginListResponse>("GET", "/api/plugins");
+}
+
+export async function togglePlugin(
+  pluginId: string,
+  enabled: boolean,
+): Promise<PluginRecord> {
+  return requestJson<PluginRecord>("PUT", `/api/plugins/${pluginId}/toggle`, { enabled });
+}
+
+export async function deletePlugin(pluginId: string): Promise<PluginRecord> {
+  return requestJson<PluginRecord>("DELETE", `/api/plugins/${pluginId}`);
+}
+
+export async function importPluginZip(file: File): Promise<PluginRecord> {
+  if (!file.name.toLowerCase().endsWith(".zip")) {
+    throw new Error("仅支持 .zip 插件包");
+  }
+
+  const payloadBase64 = await fileToBase64(file);
+  const response = await invoke<CoreApiResponse>("core_import_plugin_zip", {
+    request: {
+      fileName: file.name,
+      payloadBase64,
+    },
+  });
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(buildApiErrorMessage("POST", "/api/plugins/import", response));
+  }
+  return JSON.parse(response.body) as PluginRecord;
 }
 
 export async function fetchSources(): Promise<SourceListResponse> {
@@ -181,4 +217,25 @@ function buildApiErrorMessage(
   }
 
   return fallback;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("读取插件文件失败"));
+        return;
+      }
+      const marker = "base64,";
+      const markerIndex = reader.result.indexOf(marker);
+      if (markerIndex < 0) {
+        reject(new Error("插件文件编码失败"));
+        return;
+      }
+      resolve(reader.result.slice(markerIndex + marker.length));
+    };
+    reader.onerror = () => reject(new Error("读取插件文件失败"));
+    reader.readAsDataURL(file);
+  });
 }
