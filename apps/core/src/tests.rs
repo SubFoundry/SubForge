@@ -6,6 +6,7 @@ use crate::cli::RefreshArgs;
 use crate::settings_seed::set_default_setting_if_absent;
 
 mod config;
+mod headless_runtime;
 
 #[test]
 fn set_default_setting_only_writes_when_missing() -> StorageResult<()> {
