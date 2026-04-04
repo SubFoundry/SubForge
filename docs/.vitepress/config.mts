@@ -11,6 +11,7 @@ export default defineConfig({
     nav: [
       { text: "首页", link: "/" },
       { text: "快速开始", link: "/quick-start" },
+      { text: "配置", link: "/guide/configuration" },
       { text: "API", link: "/api/overview" },
       { text: "插件", link: "/plugins/overview" },
       { text: "部署", link: "/deploy/headless" }
@@ -20,6 +21,7 @@ export default defineConfig({
         text: "入门",
         items: [
           { text: "快速开始", link: "/quick-start" },
+          { text: "配置文件", link: "/guide/configuration" },
           { text: "架构总览", link: "/guide/architecture" },
           { text: "安全模型", link: "/guide/security" }
         ]
@@ -29,7 +31,7 @@ export default defineConfig({
         items: [
           { text: "插件体系", link: "/plugins/overview" },
           { text: "静态插件", link: "/plugins/static" },
-          { text: "脚本插件", link: "/plugins/script" }
+          { text: "脚本开发", link: "/plugins/script" }
         ]
       },
       {

@@ -8,6 +8,8 @@
 subforge-core run -c /etc/subforge/config.toml
 ```
 
+配置字段说明见：`/guide/configuration`
+
 ## Docker 镜像（非 root）
 
 仓库根目录提供了用于无头模式的 `Dockerfile`，容器内默认使用 `subforge` 非 root 用户运行。

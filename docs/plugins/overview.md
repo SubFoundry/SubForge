@@ -20,3 +20,8 @@ my-plugin/
 ```
 
 更多字段说明见下级文档。
+
+## 推荐阅读顺序
+
+1. `plugins/static`：了解固定 URL 来源。
+2. `plugins/script`：了解脚本入口契约、Runtime API、运行限制与安全边界。
