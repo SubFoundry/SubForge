@@ -43,6 +43,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.1
         with:
           components: rustfmt
+      - name: Ensure rustfmt component is available
+        run: rustup component add rustfmt --toolchain 1.94.1
       - name: Cargo fmt check
         run: cargo fmt --all -- --check
       - name: Cargo check
@@ -71,6 +73,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.1
         with:
           components: clippy
+      - name: Ensure clippy component is available
+        run: rustup component add clippy --toolchain 1.94.1
       - uses: taiki-e/install-action@cargo-audit
       - uses: pnpm/action-setup@v4
         with:
