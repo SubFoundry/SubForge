@@ -20,19 +20,20 @@ docker build -t subforge-core:local .
 
 ### 快速启动（env secrets 后端）
 
+默认命令不依赖配置文件，可直接用于健康检查与空白实例启动：
+
 ```bash
-docker run --rm -p 18118:18118 \
-  -v "$PWD/subforge.example.toml:/etc/subforge/config.toml:ro" \
-  -v "$PWD/.subforge-data:/var/lib/subforge" \
+docker run --rm -p 18118:18118 -v "$PWD/.subforge-data:/var/lib/subforge" \
   subforge-core:local
 ```
 
 ### 生产建议（file secrets 后端）
 
-`file` 后端需要主密码，建议通过环境变量注入：
+若使用仓库示例配置文件（`subforge.example.toml`），需额外提供 `SUBFORGE_SCRIPT_PASSWORD`。`file` 后端需要主密码，建议通过环境变量注入：
 
 ```bash
 docker run --rm -p 18118:18118 \
+  -e SUBFORGE_SCRIPT_PASSWORD="replace-with-source-password" \
   -e SUBFORGE_SECRET_KEY="replace-with-strong-passphrase" \
   -v "$PWD/subforge.example.toml:/etc/subforge/config.toml:ro" \
   -v "$PWD/.subforge-data:/var/lib/subforge" \

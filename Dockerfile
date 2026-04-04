@@ -28,13 +28,14 @@ RUN mkdir -p /etc/subforge /var/lib/subforge \
 
 COPY --from=builder /work/target/release/subforge-core /usr/local/bin/subforge-core
 COPY subforge.example.toml /etc/subforge/config.toml
+COPY plugins /etc/subforge/plugins
 
 RUN chmod 0755 /usr/local/bin/subforge-core \
-    && chown subforge:subforge /etc/subforge/config.toml
+    && chown -R subforge:subforge /etc/subforge
 
 USER subforge:subforge
 
 EXPOSE 18118
 
 ENTRYPOINT ["/usr/bin/tini", "--", "subforge-core"]
-CMD ["run", "-c", "/etc/subforge/config.toml", "--data-dir", "/var/lib/subforge", "--secrets-backend", "env"]
+CMD ["run", "--host", "0.0.0.0", "--port", "18118", "--data-dir", "/var/lib/subforge", "--secrets-backend", "env"]
