@@ -1,5 +1,7 @@
 use super::*;
+use app_common::ErrorResponse;
 use app_plugin_runtime::PluginLoader;
+use std::path::{Path, PathBuf};
 
 pub(crate) async fn list_plugins_handler(
     State(state): State<ServerContext>,
@@ -48,14 +50,11 @@ pub(crate) async fn import_plugin_handler(
     validate_zip_safety(&payload)?;
     let temp_dir = tempfile::tempdir().map_err(|_| internal_error_response())?;
     extract_zip_to_dir(&payload, temp_dir.path())?;
-
-    if !temp_dir.path().join("plugin.json").exists() {
-        return Err(config_error_response("插件包中缺少 plugin.json"));
-    }
+    let plugin_root_dir = resolve_plugin_root_dir(temp_dir.path())?;
 
     let service = PluginInstallService::new(state.database.as_ref(), &state.plugins_dir);
     let installed = service
-        .install_from_dir(temp_dir.path())
+        .install_from_dir(&plugin_root_dir)
         .map_err(core_error_to_response)?;
 
     emit_event(
@@ -181,4 +180,49 @@ pub(crate) async fn get_plugin_schema_handler(
             schema: loaded.schema,
         }),
     ))
+}
+
+fn resolve_plugin_root_dir(
+    extract_root: &Path,
+) -> Result<PathBuf, (StatusCode, Json<ErrorResponse>)> {
+    if extract_root.join("plugin.json").is_file() {
+        return Ok(extract_root.to_path_buf());
+    }
+
+    let mut queue = vec![extract_root.to_path_buf()];
+    let mut candidates = Vec::new();
+
+    while let Some(dir) = queue.pop() {
+        let entries = fs::read_dir(&dir).map_err(|_| internal_error_response())?;
+        for entry in entries {
+            let entry = entry.map_err(|_| internal_error_response())?;
+            let entry_path = entry.path();
+            let file_type = entry.file_type().map_err(|_| internal_error_response())?;
+
+            if file_type.is_dir() {
+                queue.push(entry_path);
+                continue;
+            }
+
+            if file_type.is_file()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("plugin.json"))
+            {
+                candidates.push(dir.clone());
+            }
+        }
+    }
+
+    candidates.sort_unstable();
+    candidates.dedup();
+
+    match candidates.len() {
+        0 => Err(config_error_response("插件包中缺少 plugin.json")),
+        1 => Ok(candidates.remove(0)),
+        _ => Err(config_error_response(
+            "插件包中存在多个 plugin.json，请确保仅包含一个插件目录",
+        )),
+    }
 }

@@ -112,6 +112,26 @@ pub(super) fn build_builtin_plugin_zip_bytes() -> Vec<u8> {
     cursor.into_inner()
 }
 
+pub(super) fn build_builtin_plugin_zip_bytes_with_root_dir(root_dir: &str) -> Vec<u8> {
+    let plugin_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/builtins/static");
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let options = SimpleFileOptions::default();
+        for file_name in ["plugin.json", "schema.json"] {
+            let zip_entry = format!("{root_dir}/{file_name}");
+            writer
+                .start_file(zip_entry, options)
+                .expect("写入 zip 条目失败");
+            let bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
+            writer.write_all(&bytes).expect("写入 zip 数据失败");
+        }
+        writer.finish().expect("完成 zip 构建失败");
+    }
+    cursor.into_inner()
+}
+
 pub(super) fn script_mock_plugin_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/examples/script-mock")
 }

@@ -66,6 +66,7 @@ impl CoreManager {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        apply_windows_spawn_flags(&mut command);
 
         let mut child = command.spawn().context("启动 subforge-core 失败")?;
         let stdout = child
@@ -338,3 +339,14 @@ impl CoreManager {
         None
     }
 }
+
+#[cfg(windows)]
+fn apply_windows_spawn_flags(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn apply_windows_spawn_flags(_command: &mut Command) {}
