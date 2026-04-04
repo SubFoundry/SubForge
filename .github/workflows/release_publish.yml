@@ -80,6 +80,12 @@ jobs:
           Source run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${{ github.event.workflow_run.id }}"
 
           if gh release view pre-release >/dev/null 2>&1; then
+            mapfile -t old_ids < <(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/pre-release" --jq '.assets[].id')
+            for asset_id in "${old_ids[@]}"; do
+              if [ -n "${asset_id}" ]; then
+                gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+              fi
+            done
             gh release upload pre-release "${files[@]}" --clobber
             gh release edit pre-release --title "SubForge Pre-release (main)" --prerelease --notes "$notes"
           else
