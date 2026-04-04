@@ -266,6 +266,26 @@ impl CoreManager {
     }
 
     fn build_core_launch_command(&self, app_handle: &AppHandle) -> Result<Command> {
+        if cfg!(debug_assertions)
+            && let Some(workspace_root) = self.workspace_root.as_ref()
+        {
+            if let Some(binary_path) = resolve_workspace_core_binary_path(workspace_root) {
+                let mut command = Command::new(binary_path);
+                command.arg("run");
+                return Ok(command);
+            }
+
+            let mut command = Command::new("cargo");
+            command
+                .current_dir(workspace_root)
+                .arg("run")
+                .arg("-p")
+                .arg("subforge-core")
+                .arg("--")
+                .arg("run");
+            return Ok(command);
+        }
+
         if let Some(sidecar_path) = self.resolve_sidecar_path(app_handle) {
             let mut command = Command::new(&sidecar_path);
             command.arg("run");
@@ -338,6 +358,15 @@ impl CoreManager {
 
         None
     }
+}
+
+fn resolve_workspace_core_binary_path(workspace_root: &std::path::Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let path = workspace_root.join("target").join("debug").join("subforge-core.exe");
+    #[cfg(not(windows))]
+    let path = workspace_root.join("target").join("debug").join("subforge-core");
+
+    if path.is_file() { Some(path) } else { None }
 }
 
 fn is_placeholder_sidecar(path: &std::path::Path) -> bool {
