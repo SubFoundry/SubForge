@@ -283,14 +283,25 @@ pub(crate) fn core_error_to_response(error: CoreError) -> (StatusCode, Json<Erro
         | CoreError::PluginRuntime(PluginRuntimeError::ScriptRuntime(message)) => {
             error_response(StatusCode::BAD_REQUEST, &code, message, true)
         }
+        CoreError::PluginRuntime(PluginRuntimeError::Incompatible(message))
+        | CoreError::PluginRuntime(PluginRuntimeError::Invalid(message)) => {
+            error_response(StatusCode::BAD_REQUEST, &code, message, false)
+        }
+        CoreError::PluginRuntime(PluginRuntimeError::ManifestParse(_))
+        | CoreError::PluginRuntime(PluginRuntimeError::SchemaParse(_))
+        | CoreError::PluginRuntime(PluginRuntimeError::Io(_)) => error_response(
+            StatusCode::BAD_REQUEST,
+            &code,
+            "插件包不合法或结构不完整",
+            false,
+        ),
         CoreError::Transport(_) => error_response(
             StatusCode::BAD_GATEWAY,
             &code,
             "Upstream request failed",
             true,
         ),
-        CoreError::PluginRuntime(_)
-        | CoreError::Storage(_)
+        CoreError::Storage(_)
         | CoreError::Secret(_)
         | CoreError::Io(_)
         | CoreError::TimeFormat(_)

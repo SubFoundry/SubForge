@@ -29,3 +29,13 @@ fn core_script_runtime_error_keeps_runtime_message() {
     assert_eq!(payload.code, "E_SCRIPT_RUNTIME");
     assert_eq!(payload.message, "script failed");
 }
+
+#[test]
+fn core_plugin_invalid_error_maps_to_bad_request_message() {
+    let (status, Json(payload)) = core_error_to_response(CoreError::PluginRuntime(
+        PluginRuntimeError::Invalid("缺少入口脚本 fetch".to_string()),
+    ));
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(payload.code, "E_PLUGIN_INVALID");
+    assert_eq!(payload.message, "缺少入口脚本 fetch");
+}

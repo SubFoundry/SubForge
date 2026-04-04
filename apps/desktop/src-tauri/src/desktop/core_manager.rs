@@ -330,7 +330,7 @@ impl CoreManager {
         for dir in candidate_dirs {
             for file_name in &candidate_file_names {
                 let candidate = dir.join(file_name);
-                if candidate.is_file() {
+                if candidate.is_file() && !is_placeholder_sidecar(&candidate) {
                     return Some(candidate);
                 }
             }
@@ -338,6 +338,17 @@ impl CoreManager {
 
         None
     }
+}
+
+fn is_placeholder_sidecar(path: &std::path::Path) -> bool {
+    if !cfg!(debug_assertions) {
+        return false;
+    }
+
+    const PLACEHOLDER_BYTES: &[u8] = b"subforge-core sidecar placeholder";
+    fs::read(path)
+        .map(|bytes| bytes == PLACEHOLDER_BYTES)
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]
