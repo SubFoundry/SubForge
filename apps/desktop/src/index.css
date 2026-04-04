@@ -240,3 +240,24 @@ body {
   outline: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 78%, transparent);
 }
+
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 78%, transparent);
+  border-radius: 0.35rem;
+}
+
+@media (max-width: 1024px) {
+  .ui-page-title {
+    font-size: 1.32rem;
+  }
+
+  .ui-card {
+    padding: 0.8rem;
+  }
+
+  .ui-card-body {
+    margin-top: 0.72rem;
+  }
+}

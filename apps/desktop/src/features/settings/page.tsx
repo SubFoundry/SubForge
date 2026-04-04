@@ -192,11 +192,12 @@ export default function SettingsPage() {
 
   return (
     <section className="ui-page">
-      <header>
-        <h2 className="ui-page-title">Settings</h2>
-        <p className="ui-page-desc">
-          配置主题、空闲自动关闭与窗口关闭行为。
-        </p>
+      <header className="ui-page-header">
+        <div>
+          <h2 className="ui-page-title">Settings</h2>
+          <p className="ui-page-desc">配置主题、空闲自动关闭与窗口关闭行为。</p>
+        </div>
+        <span className="ui-badge ui-badge-muted">Desktop Runtime</span>
       </header>
 
       <article className="ui-card">
@@ -305,7 +306,7 @@ export default function SettingsPage() {
                   value={option.value}
                   checked={closeBehaviorInput === option.value}
                   onChange={() => setCloseBehaviorInput(option.value)}
-                  className="mt-1"
+                  className="ui-focus mt-1"
                 />
                 <span className="space-y-1">
                   <span className="block text-sm font-medium text-[var(--app-text)]">

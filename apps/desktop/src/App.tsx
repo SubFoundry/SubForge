@@ -40,8 +40,8 @@ export default function App() {
         </div>
       )}
 
-      <div className="mx-auto flex min-h-screen max-w-[1540px] gap-4 p-4 md:gap-6 md:p-6">
-        <aside className="w-full rounded-2xl border border-[var(--panel-border)] bg-[var(--panel-bg)] p-4 shadow-[0_24px_70px_rgba(5,12,24,0.45)] backdrop-blur md:sticky md:top-6 md:h-[calc(100vh-3rem)] md:w-[282px] md:overflow-y-auto">
+      <div className="mx-auto flex min-h-screen max-w-[1540px] flex-col gap-4 p-4 md:gap-6 md:p-6 xl:flex-row">
+        <aside className="w-full rounded-2xl border border-[var(--panel-border)] bg-[var(--panel-bg)] p-4 shadow-[0_24px_70px_rgba(5,12,24,0.45)] backdrop-blur xl:sticky xl:top-6 xl:h-[calc(100vh-3rem)] xl:w-[282px] xl:min-w-[282px] xl:overflow-y-auto">
           <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel-muted)]/72 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted-text)]">
               SubForge
@@ -60,7 +60,8 @@ export default function App() {
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`group flex shrink-0 items-center gap-3 rounded-lg border px-3 py-2 text-sm transition ${
+                  aria-current={active ? "page" : undefined}
+                  className={`ui-focus group flex shrink-0 items-center gap-3 rounded-lg border px-3 py-2 text-sm transition ${
                     active
                       ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--app-text)]"
                       : "border-transparent text-[var(--muted-text)] hover:border-[var(--panel-border)] hover:bg-[var(--panel-muted)]"
@@ -92,7 +93,7 @@ export default function App() {
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col gap-4">
+        <section className="flex w-full min-w-0 flex-1 flex-col gap-4">
           <header className="rounded-2xl border border-[var(--panel-border)] bg-[var(--panel-bg)] px-4 py-3 shadow-[0_16px_40px_rgba(5,12,24,0.32)] backdrop-blur md:px-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>

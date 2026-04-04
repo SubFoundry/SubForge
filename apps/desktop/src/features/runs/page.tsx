@@ -96,7 +96,7 @@ export default function RunsPage() {
           <label className="text-xs text-[var(--muted-text)]">
             状态筛选
             <select
-              className="ui-select mt-1"
+              className="ui-select ui-focus mt-1"
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.currentTarget.value as typeof statusFilter)
@@ -112,7 +112,7 @@ export default function RunsPage() {
           <label className="text-xs text-[var(--muted-text)]">
             来源筛选
             <select
-              className="ui-select mt-1"
+              className="ui-select ui-focus mt-1"
               value={sourceFilter}
               onChange={(event) => setSourceFilter(event.currentTarget.value)}
             >
@@ -159,7 +159,7 @@ export default function RunsPage() {
         )}
       </article>
 
-      <footer className="flex items-center justify-between rounded-xl border border-[var(--panel-border)] bg-[var(--panel-muted)]/55 px-4 py-3 text-sm">
+      <footer className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--panel-border)] bg-[var(--panel-muted)]/55 px-4 py-3 text-sm">
         <span className="text-[var(--muted-text)]">
           第 {page} / {totalPages} 页（每页 {PAGE_SIZE} 条）
         </span>

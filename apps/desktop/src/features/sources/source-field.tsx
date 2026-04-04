@@ -33,7 +33,7 @@ export function SourceField({
           {required ? " *" : ""}
         </span>
         <select
-          className="ui-select mt-1"
+          className="ui-select ui-focus mt-1"
           value={selectedValue}
           onChange={(event) => {
             if (!event.currentTarget.value) {
@@ -62,6 +62,7 @@ export function SourceField({
     return (
       <label className="ui-focus flex items-center gap-2 rounded-md border border-[var(--panel-border)] bg-[var(--panel-bg)] px-3 py-2 text-sm text-[var(--app-text)]">
         <input
+          className="ui-focus"
           type="checkbox"
           checked={Boolean(value)}
           onChange={(event) => onChange(event.currentTarget.checked)}
@@ -82,7 +83,7 @@ export function SourceField({
           {required ? " *" : ""}
         </span>
         <input
-          className="ui-input mt-1"
+          className="ui-input ui-focus mt-1"
           type="number"
           step={property.property_type === "integer" ? "1" : "any"}
           min={property.minimum}
@@ -107,7 +108,7 @@ export function SourceField({
         {required ? " *" : ""}
       </span>
       <input
-        className="ui-input mt-1"
+        className="ui-input ui-focus mt-1"
         type={isPassword ? "password" : "text"}
         minLength={property.min_length}
         maxLength={property.max_length}

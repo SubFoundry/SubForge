@@ -56,7 +56,7 @@ export function SourceFormCard({
           <label className="text-xs text-[var(--muted-text)]">
             <span className="text-[var(--app-text)]">插件</span>
             <select
-              className="ui-select mt-1 disabled:opacity-70"
+              className="ui-select ui-focus mt-1 disabled:opacity-70"
               value={pluginId}
               disabled={mode === "edit"}
               onChange={(event) => onPluginIdChange(event.currentTarget.value)}
@@ -73,7 +73,7 @@ export function SourceFormCard({
           <label className="text-xs text-[var(--muted-text)]">
             <span className="text-[var(--app-text)]">来源名称</span>
             <input
-              className="ui-input mt-1"
+              className="ui-input ui-focus mt-1"
               value={sourceName}
               onChange={(event) => onSourceNameChange(event.currentTarget.value)}
               placeholder="例如：主订阅 / 备用订阅"

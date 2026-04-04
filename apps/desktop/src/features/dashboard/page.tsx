@@ -118,14 +118,14 @@ export default function DashboardPage() {
       </header>
 
       {isBooting ? (
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Skeleton className="h-24" />
           <Skeleton className="h-24" />
           <Skeleton className="h-24" />
           <Skeleton className="h-24" />
         </div>
       ) : (
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatusCard
             title="Core 状态"
             value={status?.running ? "运行中" : "未运行"}
@@ -150,11 +150,18 @@ export default function DashboardPage() {
       )}
 
       <article className="ui-card">
-        <h3 className="ui-card-title">连接概览</h3>
-        <p className="mt-3 text-sm text-[var(--app-text)]">
-          事件流：{eventStreamActive ? "已连接" : "未连接"} | 心跳：{formatTimestamp(heartbeatAt)} |
-          最近事件：{lastEvent?.event ?? "暂无"}
-        </p>
+        <div className="ui-card-header">
+          <div>
+            <h3 className="ui-card-title">连接概览</h3>
+            <p className="ui-card-desc">事件流、心跳与最近事件的即时状态。</p>
+          </div>
+        </div>
+        <div className="ui-card-body">
+          <p className="text-sm text-[var(--app-text)]">
+            事件流：{eventStreamActive ? "已连接" : "未连接"} | 心跳：
+            {formatTimestamp(heartbeatAt)} | 最近事件：{lastEvent?.event ?? "暂无"}
+          </p>
+        </div>
       </article>
 
       <article className="ui-card">

@@ -76,7 +76,7 @@ export function ProfileListCard({
                               .join(" / ")}
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
                       <button
                         type="button"
                         className="ui-btn ui-btn-secondary ui-focus"
@@ -116,7 +116,7 @@ export function ProfileListCard({
                           <span className="text-xs font-medium text-[var(--muted-text)]">
                             {format.label}
                           </span>
-                          <code className="overflow-x-auto text-xs text-[var(--app-text)]">{url}</code>
+                          <code className="break-all text-xs text-[var(--app-text)]">{url}</code>
                           <button
                             type="button"
                             className="ui-btn ui-btn-secondary ui-focus"

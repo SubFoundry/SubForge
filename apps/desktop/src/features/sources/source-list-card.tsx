@@ -55,7 +55,7 @@ export function SourceListCard({
                         {formatTimestamp(source.updated_at)}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
                       <span className={`ui-badge ${statusToneClass(source.status)}`}>
                         {source.status}
                       </span>

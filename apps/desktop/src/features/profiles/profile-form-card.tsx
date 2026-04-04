@@ -47,7 +47,7 @@ export function ProfileFormCard({
           <label className="text-xs text-[var(--muted-text)]">
             <span className="text-[var(--app-text)]">名称</span>
             <input
-              className="ui-input mt-1"
+              className="ui-input ui-focus mt-1"
               value={formName}
               onChange={(event) => onNameChange(event.currentTarget.value)}
               placeholder="例如：主力聚合"
@@ -57,7 +57,7 @@ export function ProfileFormCard({
           <label className="text-xs text-[var(--muted-text)]">
             <span className="text-[var(--app-text)]">描述（可选）</span>
             <input
-              className="ui-input mt-1"
+              className="ui-input ui-focus mt-1"
               value={formDescription}
               onChange={(event) => onDescriptionChange(event.currentTarget.value)}
               placeholder="例如：给 Mihomo 与 sing-box 共用"
@@ -82,6 +82,7 @@ export function ProfileFormCard({
                   className="ui-focus flex items-center gap-2 rounded-md border border-[var(--panel-border)] bg-[var(--panel-bg)] px-3 py-2 text-sm text-[var(--app-text)]"
                 >
                   <input
+                    className="ui-focus"
                     type="checkbox"
                     checked={selectedSourceIds.includes(item.source.id)}
                     onChange={(event) =>
