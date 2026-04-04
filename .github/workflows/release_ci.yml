@@ -407,9 +407,20 @@ jobs:
           }
           New-Item -ItemType Directory -Path $installDir | Out-Null
 
-          & $installer.FullName /S /D=$installDir
-          if ($LASTEXITCODE -ne 0) {
-            throw "静默安装失败，退出码：$LASTEXITCODE"
+          $installExitCode = $null
+          $installArgs = @("/S", "/D=$installDir")
+          for ($attempt = 1; $attempt -le 2; $attempt++) {
+            $installProc = Start-Process -FilePath $installer.FullName -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
+            $installExitCode = $installProc.ExitCode
+            if ($installExitCode -eq 0) {
+              break
+            }
+            if ($attempt -lt 2) {
+              Start-Sleep -Seconds 2
+            }
+          }
+          if ($installExitCode -ne 0) {
+            throw "静默安装失败，退出码：$installExitCode"
           }
 
           $desktopExe = $null
@@ -458,5 +469,8 @@ jobs:
 
           $uninstaller = Join-Path $installDir "uninstall.exe"
           if (Test-Path -LiteralPath $uninstaller) {
-            & $uninstaller /S
+            $uninstallProc = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -Wait -PassThru -NoNewWindow
+            if ($uninstallProc.ExitCode -ne 0) {
+              throw "静默卸载失败，退出码：$($uninstallProc.ExitCode)"
+            }
           }
