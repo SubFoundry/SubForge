@@ -34,14 +34,8 @@ pub(super) fn execute_stage(
         .and_then(Value::as_bool)
         .ok_or_else(|| script_runtime_error(&format!("{stage_name} 返回值缺少布尔字段 ok")))?;
     if !ok {
-        let message = object
-            .get("error")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("脚本返回失败且未提供 error");
-        return Err(script_runtime_error(&format!(
-            "{stage_name} 失败：{message}"
-        )));
+        let message = resolve_stage_error_message(object.get("error"));
+        return Err(script_runtime_error(&format!("{stage_name} 失败：{message}")));
     }
 
     Ok(StageResult {
@@ -74,11 +68,7 @@ pub(super) fn execute_fetch_stage(
         .and_then(Value::as_bool)
         .ok_or_else(|| script_runtime_error("fetch 返回值缺少布尔字段 ok"))?;
     if !ok {
-        let message = object
-            .get("error")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("脚本返回失败且未提供 error");
+        let message = resolve_stage_error_message(object.get("error"));
         return Err(script_runtime_error(&format!("fetch 失败：{message}")));
     }
 
@@ -135,6 +125,57 @@ fn parse_state_update(object: &Map<String, Value>) -> CoreResult<StateUpdate> {
         Some(value) if value.is_null() => Ok(StateUpdate::Replace(None)),
         Some(value) if value.is_object() => Ok(StateUpdate::Replace(Some(value.clone()))),
         Some(_) => Err(script_runtime_error("state 必须是对象或 null")),
+    }
+}
+
+fn resolve_stage_error_message(raw_error: Option<&Value>) -> String {
+    raw_error
+        .and_then(format_script_error)
+        .unwrap_or_else(|| "脚本返回失败且未提供 error".to_string())
+}
+
+fn format_script_error(value: &Value) -> Option<String> {
+    match value {
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Object(map) => {
+            let code = map
+                .get("code")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|raw| !raw.is_empty());
+            let message = map
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|raw| !raw.is_empty());
+            let retryable = map.get("retryable").and_then(Value::as_bool);
+
+            let resolved = match (code, message, retryable) {
+                (Some(code), Some(message), Some(retryable)) => {
+                    Some(format!("{code}: {message} (retryable={retryable})"))
+                }
+                (Some(code), Some(message), None) => Some(format!("{code}: {message}")),
+                (Some(code), None, _) => Some(code.to_string()),
+                (None, Some(message), Some(retryable)) => {
+                    Some(format!("{message} (retryable={retryable})"))
+                }
+                (None, Some(message), None) => Some(message.to_string()),
+                (None, None, _) => None,
+            };
+            if resolved.is_some() {
+                return resolved;
+            }
+            serde_json::to_string(value).ok().filter(|raw| raw != "{}")
+        }
+        Value::Array(_) | Value::Bool(_) | Value::Number(_) => Some(value.to_string()),
+        Value::Null => None,
     }
 }
 

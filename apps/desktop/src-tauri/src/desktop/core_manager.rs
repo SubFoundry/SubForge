@@ -66,6 +66,7 @@ impl CoreManager {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        apply_desktop_secret_backend_args(&mut command);
         apply_windows_spawn_flags(&mut command);
 
         let mut child = command.spawn().context("启动 subforge-core 失败")?;
@@ -390,3 +391,30 @@ fn apply_windows_spawn_flags(command: &mut Command) {
 
 #[cfg(not(windows))]
 fn apply_windows_spawn_flags(_command: &mut Command) {}
+
+fn apply_desktop_secret_backend_args(command: &mut Command) {
+    if let Ok(backend) = std::env::var("SUBFORGE_DESKTOP_SECRETS_BACKEND") {
+        let backend = backend.trim();
+        if !backend.is_empty() {
+            command.arg("--secrets-backend").arg(backend);
+            if backend.eq_ignore_ascii_case("file")
+                && let Ok(secret_key) = std::env::var("SUBFORGE_DESKTOP_SECRET_KEY")
+            {
+                let secret_key = secret_key.trim();
+                if !secret_key.is_empty() {
+                    command.arg("--secret-key").arg(secret_key);
+                }
+            }
+            return;
+        }
+    }
+
+    if cfg!(debug_assertions) {
+        // dev 环境默认使用 file 后端，规避部分系统 keyring 写入后无法回读的问题。
+        command
+            .arg("--secrets-backend")
+            .arg("file")
+            .arg("--secret-key")
+            .arg("subforge-desktop-dev-secret-key");
+    }
+}

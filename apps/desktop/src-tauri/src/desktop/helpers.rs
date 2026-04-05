@@ -39,6 +39,9 @@ pub(super) fn resolve_core_data_dir(workspace_root: Option<&Path>) -> Result<Pat
     }
 
     if let Some(root) = workspace_root {
+        if cfg!(debug_assertions) {
+            return Ok(root.join("target").join(".subforge-desktop-dev"));
+        }
         return Ok(root.join(".subforge-desktop"));
     }
 

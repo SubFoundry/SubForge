@@ -73,11 +73,13 @@ db_path = "./data/subforge.db"
 ```toml
 [secrets]
 backend = "env"
+# backend = "keyring"
 # backend = "file"
+# backend = "memory"
 # file_path = "./data/secrets.enc"
 ```
 
-- `backend`：`env` 或 `file`（MVP 常用）。
+- `backend`：支持 `keyring / env / file / memory`（无头部署常用 `env` 或 `file`）。
 - `file_path`：`file` 后端密文文件路径。
 
 ## refresh

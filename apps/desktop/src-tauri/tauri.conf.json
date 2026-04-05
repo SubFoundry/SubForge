@@ -18,6 +18,7 @@
         "width": 1280,
         "height": 800,
         "resizable": true,
+        "dragDropEnabled": false,
         "devtools": false
       }
     ],

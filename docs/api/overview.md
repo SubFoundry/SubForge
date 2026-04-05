@@ -8,9 +8,21 @@
 
 - `GET /api/system/status`
 - `PUT /api/system/settings`
-- `GET/POST/PUT/DELETE /api/plugins`
-- `GET/POST/PUT/DELETE /api/sources`
-- `GET/POST/PUT/DELETE /api/profiles`
+- `GET /api/plugins`
+- `POST /api/plugins/import`
+- `DELETE /api/plugins/{id}`
+- `PUT /api/plugins/{id}/toggle`
+- `GET /api/plugins/{id}/schema`
+- `GET /api/sources`
+- `POST /api/sources`
+- `PUT /api/sources/{id}`
+- `DELETE /api/sources/{id}`
+- `POST /api/sources/{id}/refresh`
+- `GET /api/profiles`
+- `POST /api/profiles`
+- `PUT /api/profiles/{id}`
+- `DELETE /api/profiles/{id}`
+- `POST /api/profiles/{id}/refresh`
 - `POST /api/tokens/{profile_id}/rotate`
 - `GET /api/events`（SSE）
 

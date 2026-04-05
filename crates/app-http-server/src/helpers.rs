@@ -46,15 +46,7 @@ pub(crate) fn validate_zip_safety(payload: &[u8]) -> Result<(), (StatusCode, Jso
         let file = archive
             .by_index(index)
             .map_err(|_| config_error_response("读取 zip 条目失败"))?;
-        let Some(path) = file.enclosed_name() else {
-            return Err(config_error_response("插件包路径非法，包含越界路径"));
-        };
-        if path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
-        {
-            return Err(config_error_response("插件包路径非法，包含 .."));
-        }
+        normalize_zip_entry_path(file.name())?;
         total_uncompressed = total_uncompressed.saturating_add(file.size());
         if total_uncompressed > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES {
             return Err(config_error_response("插件包解压总大小超过 50MB"));
@@ -74,10 +66,8 @@ pub(crate) fn extract_zip_to_dir(
         let mut file = archive
             .by_index(index)
             .map_err(|_| config_error_response("读取 zip 条目失败"))?;
-        let enclosed = file
-            .enclosed_name()
-            .ok_or_else(|| config_error_response("插件包路径非法，包含越界路径"))?;
-        let out_path = target_dir.join(enclosed);
+        let entry_path = normalize_zip_entry_path(file.name())?;
+        let out_path = target_dir.join(entry_path);
 
         if file.is_dir() {
             fs::create_dir_all(&out_path).map_err(|_| internal_error_response())?;
@@ -91,6 +81,30 @@ pub(crate) fn extract_zip_to_dir(
         output.flush().map_err(|_| internal_error_response())?;
     }
     Ok(())
+}
+
+fn normalize_zip_entry_path(
+    raw_name: &str,
+) -> Result<std::path::PathBuf, (StatusCode, Json<ErrorResponse>)> {
+    // 兼容 Windows 常见打包工具（如 Compress-Archive）写入的反斜杠分隔符。
+    let normalized = raw_name.replace('\\', "/");
+    let mut result = std::path::PathBuf::new();
+    for component in Path::new(&normalized).components() {
+        match component {
+            Component::Normal(part) => result.push(part),
+            Component::CurDir => continue,
+            Component::ParentDir => return Err(config_error_response("插件包路径非法，包含 ..")),
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(config_error_response("插件包路径非法，包含越界路径"));
+            }
+        }
+    }
+
+    if result.as_os_str().is_empty() {
+        return Err(config_error_response("插件包路径非法，包含越界路径"));
+    }
+
+    Ok(result)
 }
 
 pub(crate) fn validate_source_ids_exist(
@@ -287,12 +301,22 @@ pub(crate) fn core_error_to_response(error: CoreError) -> (StatusCode, Json<Erro
         | CoreError::PluginRuntime(PluginRuntimeError::Invalid(message)) => {
             error_response(StatusCode::BAD_REQUEST, &code, message, false)
         }
-        CoreError::PluginRuntime(PluginRuntimeError::ManifestParse(_))
-        | CoreError::PluginRuntime(PluginRuntimeError::SchemaParse(_))
-        | CoreError::PluginRuntime(PluginRuntimeError::Io(_)) => error_response(
+        CoreError::PluginRuntime(PluginRuntimeError::ManifestParse(error)) => error_response(
             StatusCode::BAD_REQUEST,
             &code,
-            "插件包不合法或结构不完整",
+            format!("plugin.json 解析失败：{error}"),
+            false,
+        ),
+        CoreError::PluginRuntime(PluginRuntimeError::SchemaParse(error)) => error_response(
+            StatusCode::BAD_REQUEST,
+            &code,
+            format!("schema.json 解析失败：{error}"),
+            false,
+        ),
+        CoreError::PluginRuntime(PluginRuntimeError::Io(_)) => error_response(
+            StatusCode::BAD_REQUEST,
+            &code,
+            "读取插件文件失败，请确认插件包结构完整（plugin.json/schema.json/脚本文件）",
             false,
         ),
         CoreError::Transport(_) => error_response(

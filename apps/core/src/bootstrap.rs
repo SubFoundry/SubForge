@@ -65,8 +65,9 @@ async fn run_server(args: RunArgs) -> Result<()> {
 
     let database_path = resolve_database_path(&data_dir, loaded_config.as_ref())?;
     let database = initialize_database(&database_path)?;
-    let effective_secret_args =
+    let mut effective_secret_args =
         build_effective_secret_args(&args.secrets, loaded_config.as_ref(), &data_dir)?;
+    apply_debug_gui_secret_backend_override(&args, &mut effective_secret_args, &data_dir);
     let (secret_backend, secret_store) =
         initialize_secret_store(&effective_secret_args, &data_dir)?;
 
@@ -294,6 +295,30 @@ fn build_effective_secret_args(
         effective.secrets_file = Some(data_dir.join(DEFAULT_SECRETS_FILE_NAME));
     }
     Ok(effective)
+}
+
+fn apply_debug_gui_secret_backend_override(
+    args: &RunArgs,
+    effective: &mut SecretStoreArgs,
+    data_dir: &Path,
+) {
+    if !cfg!(debug_assertions) || !args.gui_mode {
+        return;
+    }
+    if effective.secrets_backend != SecretBackendKind::Keyring {
+        return;
+    }
+
+    effective.secrets_backend = SecretBackendKind::File;
+    if effective.secret_key.is_none() {
+        effective.secret_key = std::env::var("SUBFORGE_SECRET_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| Some("subforge-desktop-dev-secret-key".to_string()));
+    }
+    if effective.secrets_file.is_none() {
+        effective.secrets_file = Some(data_dir.join(DEFAULT_SECRETS_FILE_NAME));
+    }
 }
 
 fn initialize_database(database_path: &Path) -> Result<Arc<Database>> {

@@ -33,15 +33,15 @@ my-plugin/
 }
 ```
 
-- `spec_version`：MVP 固定 `1.0`。
+- `spec_version`：当前支持 `1.x`（主版本号为 `1`）。
 - `secret_fields`：必须是 schema 中定义过的字段。
 - `network_profile`：`standard / browser_chrome / browser_firefox / webview_assisted`。
 
 ## 入口函数契约
 
-- `login(ctx, config) -> { ok, state?, error? }`
+- `login(ctx, config, state) -> { ok, state?, error? }`
 - `refresh(ctx, config, state) -> { ok, state?, error? }`
-- `fetch(ctx, config, state) -> { ok, subscription?, metadata?, state?, error? }`
+- `fetch(ctx, config, state) -> { ok, subscription?, state?, error? }`
 
 `subscription` 支持两种返回：
 - `{ url = "https://..." }`
@@ -61,6 +61,10 @@ my-plugin/
 - `secret.get(key)` / `secret.set(key, value)`
 - `log.info(msg)` / `log.warn(msg)` / `log.error(msg)`
 - `time.now()`
+
+`http.request` 额外约定：
+- `method` 可省略，默认 `GET`。
+- 返回状态码非 2xx 时会直接抛出运行时错误（不会返回 `resp.status` 让脚本自行判断）。
 
 不允许：
 - 系统命令
@@ -97,14 +101,14 @@ http.request({ method = "GET", url = "http://127.0.0.1:18118/health" })
 
 ```lua
 function fetch(ctx, config, state)
-  local resp = http.request({
+  local ok, resp = pcall(http.request, {
     method = "GET",
     url = config.subscription_url,
     timeout_ms = 10000
   })
 
-  if not resp or resp.status ~= 200 then
-    return { ok = false, error = { code = "E_HTTP_4XX", message = "fetch failed" } }
+  if not ok then
+    return { ok = false, error = { code = "E_HTTP", message = tostring(resp) } }
   end
 
   return {

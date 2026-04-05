@@ -363,6 +363,79 @@ async fn engine_refresh_source_stops_when_script_login_fails() {
     cleanup_dir(&temp_root);
 }
 
+#[tokio::test]
+async fn engine_refresh_source_supports_structured_script_error() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let temp_root = create_temp_dir("engine-script-login-structured-error");
+    let plugins_dir = temp_root.join("plugins");
+    let script_plugin_dir = create_script_plugin_dir(
+        &temp_root,
+        "script-login-structured-error-plugin",
+        "vendor.example.script-login-structured-error",
+        Some(
+            r#"
+                function login(ctx, config, state)
+                    return {
+                        ok = false,
+                        error = {
+                            code = "E_LOGIN_FAILED",
+                            message = "账号或密码错误",
+                            retryable = false
+                        }
+                    }
+                end
+            "#,
+        ),
+        Some(
+            r#"
+                function refresh(ctx, config, state)
+                    return { ok = true, state = { phase = "refresh" } }
+                end
+            "#,
+        ),
+        r#"
+            function fetch(ctx, config, state)
+                return {
+                    ok = true,
+                    subscription = {
+                        content = "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@example.com:443#unexpected-fetch"
+                    }
+                }
+            end
+        "#,
+    );
+    let install_service = PluginInstallService::new(&db, &plugins_dir);
+    install_service
+        .install_from_dir(&script_plugin_dir)
+        .expect("安装脚本插件应成功");
+
+    let secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
+    let source_service = SourceService::new(&db, &plugins_dir, secret_store.as_ref());
+    let mut config = BTreeMap::new();
+    config.insert("seed".to_string(), json!("gamma"));
+    let source = source_service
+        .create_source(
+            "vendor.example.script-login-structured-error",
+            "Script Login Structured Error Source",
+            config,
+        )
+        .expect("创建脚本来源应成功");
+
+    let engine = Engine::new(&db, &plugins_dir, Arc::clone(&secret_store));
+    let error = engine
+        .refresh_source(&source.source.id, "manual")
+        .await
+        .expect_err("login 返回结构化错误时刷新应失败");
+    assert_eq!(error.code(), "E_SCRIPT_RUNTIME");
+    let message = error.to_string();
+    assert!(message.contains("login 失败"));
+    assert!(message.contains("E_LOGIN_FAILED"));
+    assert!(message.contains("账号或密码错误"));
+    assert!(message.contains("retryable=false"));
+
+    cleanup_dir(&temp_root);
+}
+
 #[test]
 fn engine_ensure_profile_export_token_is_idempotent() {
     let db = Database::open_in_memory().expect("内存数据库初始化失败");

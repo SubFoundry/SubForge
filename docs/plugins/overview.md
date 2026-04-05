@@ -15,8 +15,8 @@ my-plugin/
   schema.json
   scripts/
     fetch.lua
-    login.lua
-    refresh.lua
+    login.lua (可选)
+    refresh.lua (可选)
 ```
 
 更多字段说明见下级文档。

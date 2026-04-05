@@ -219,7 +219,40 @@ fn resolve_plugin_root_dir(
     candidates.dedup();
 
     match candidates.len() {
-        0 => Err(config_error_response("插件包中缺少 plugin.json")),
+        0 => {
+            let mut queue = vec![extract_root.to_path_buf()];
+            let mut files = Vec::new();
+            while let Some(dir) = queue.pop() {
+                let entries = fs::read_dir(&dir).map_err(|_| internal_error_response())?;
+                for entry in entries {
+                    let entry = entry.map_err(|_| internal_error_response())?;
+                    let path = entry.path();
+                    let file_type = entry.file_type().map_err(|_| internal_error_response())?;
+                    if file_type.is_dir() {
+                        queue.push(path);
+                        continue;
+                    }
+                    if file_type.is_file() {
+                        let rel = path
+                            .strip_prefix(extract_root)
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|_| path.display().to_string());
+                        files.push(rel);
+                    }
+                }
+            }
+
+            files.sort_unstable();
+            files.dedup();
+            let details = if files.is_empty() {
+                "未检测到任何文件".to_string()
+            } else {
+                format!("检测到文件：{}", files.join(", "))
+            };
+            Err(config_error_response(&format!(
+                "插件包中缺少 plugin.json（{details}）"
+            )))
+        }
         1 => Ok(candidates.remove(0)),
         _ => Err(config_error_response(
             "插件包中存在多个 plugin.json，请确保仅包含一个插件目录",
