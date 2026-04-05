@@ -363,9 +363,15 @@ impl CoreManager {
 
 fn resolve_workspace_core_binary_path(workspace_root: &std::path::Path) -> Option<PathBuf> {
     #[cfg(windows)]
-    let path = workspace_root.join("target").join("debug").join("subforge-core.exe");
+    let path = workspace_root
+        .join("target")
+        .join("debug")
+        .join("subforge-core.exe");
     #[cfg(not(windows))]
-    let path = workspace_root.join("target").join("debug").join("subforge-core");
+    let path = workspace_root
+        .join("target")
+        .join("debug")
+        .join("subforge-core");
 
     if path.is_file() { Some(path) } else { None }
 }

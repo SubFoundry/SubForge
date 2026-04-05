@@ -35,7 +35,9 @@ pub(super) fn execute_stage(
         .ok_or_else(|| script_runtime_error(&format!("{stage_name} 返回值缺少布尔字段 ok")))?;
     if !ok {
         let message = resolve_stage_error_message(object.get("error"));
-        return Err(script_runtime_error(&format!("{stage_name} 失败：{message}")));
+        return Err(script_runtime_error(&format!(
+            "{stage_name} 失败：{message}"
+        )));
     }
 
     Ok(StageResult {
