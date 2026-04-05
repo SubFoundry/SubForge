@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::CoreError;
 use crate::CoreResult;
 
-use super::build_proxy_node;
+use super::{build_proxy_node, decode_percent_encoded};
 
 pub(crate) fn parse_trojan_uri(
     line: &str,
@@ -23,11 +23,11 @@ pub(crate) fn parse_trojan_uri(
     let port = url
         .port_or_known_default()
         .ok_or_else(|| CoreError::SubscriptionParse("trojan URI 缺少端口".to_string()))?;
-    let name = url
-        .fragment()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("trojan")
-        .to_string();
+    let name = decode_percent_encoded(
+        url.fragment()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("trojan"),
+    );
 
     let mut extra = BTreeMap::new();
     if !url.username().is_empty() {

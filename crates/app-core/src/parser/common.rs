@@ -9,9 +9,49 @@ use crate::{CoreError, CoreResult};
 
 pub(crate) fn split_fragment(raw: &str) -> (&str, Option<String>) {
     if let Some((value, fragment)) = raw.split_once('#') {
-        (value, Some(fragment.to_string()))
+        (value, Some(decode_percent_encoded(fragment)))
     } else {
         (raw, None)
+    }
+}
+
+pub(crate) fn decode_percent_encoded(raw: &str) -> String {
+    if !raw.as_bytes().contains(&b'%') {
+        return raw.to_string();
+    }
+
+    let bytes = raw.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hi = bytes[index + 1];
+            let lo = bytes[index + 2];
+            if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
+                let value = (hex_value(hi) << 4) | hex_value(lo);
+                decoded.push(value);
+                index += 3;
+                continue;
+            }
+        }
+
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+
+    match String::from_utf8(decoded) {
+        Ok(value) => value,
+        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    }
+}
+
+fn hex_value(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => 0,
     }
 }
 

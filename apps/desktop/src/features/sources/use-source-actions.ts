@@ -81,6 +81,10 @@ export function useSourceActions({
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
       });
+      void queryClient.invalidateQueries({ queryKey: ["sources"] });
+      void queryClient.invalidateQueries({ queryKey: ["runs", "logs"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-system-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-logs"] });
     },
     onSettled: () => {
       setActiveSourceId(null);

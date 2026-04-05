@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::CoreError;
 use crate::CoreResult;
 
-use super::{build_proxy_node, map_transport};
+use super::{build_proxy_node, decode_percent_encoded, map_transport};
 
 pub(crate) fn parse_vless_uri(
     line: &str,
@@ -23,11 +23,11 @@ pub(crate) fn parse_vless_uri(
     let port = url
         .port_or_known_default()
         .ok_or_else(|| CoreError::SubscriptionParse("vless URI 缺少端口".to_string()))?;
-    let name = url
-        .fragment()
-        .filter(|value| !value.is_empty())
-        .unwrap_or("vless")
-        .to_string();
+    let name = decode_percent_encoded(
+        url.fragment()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("vless"),
+    );
     let transport = map_transport(url.query_pairs().find_map(|(k, v)| {
         if k == "type" {
             Some(v.to_string())

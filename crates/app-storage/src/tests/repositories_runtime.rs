@@ -128,6 +128,84 @@ fn refresh_job_repository_records_success_and_failure() -> StorageResult<()> {
 }
 
 #[test]
+fn refresh_job_repository_can_finalize_running_jobs_by_source() -> StorageResult<()> {
+    let db = Database::open_in_memory()?;
+    let source_repository = SourceRepository::new(&db);
+    let refresh_repository = RefreshJobRepository::new(&db);
+    let source = sample_source("source-refresh-running-cleanup", "vendor.example.script");
+    source_repository.insert(&source)?;
+
+    refresh_repository.insert(&RefreshJob {
+        id: "refresh-job-running-1".to_string(),
+        source_instance_id: source.id.clone(),
+        trigger_type: "manual".to_string(),
+        status: "running".to_string(),
+        started_at: Some("2026-04-02T11:00:00Z".to_string()),
+        finished_at: None,
+        node_count: None,
+        error_code: None,
+        error_message: None,
+    })?;
+    refresh_repository.insert(&RefreshJob {
+        id: "refresh-job-running-2".to_string(),
+        source_instance_id: source.id.clone(),
+        trigger_type: "scheduled".to_string(),
+        status: "running".to_string(),
+        started_at: Some("2026-04-02T11:01:00Z".to_string()),
+        finished_at: None,
+        node_count: None,
+        error_code: None,
+        error_message: None,
+    })?;
+    refresh_repository.insert(&RefreshJob {
+        id: "refresh-job-success-existing".to_string(),
+        source_instance_id: source.id.clone(),
+        trigger_type: "scheduled".to_string(),
+        status: "success".to_string(),
+        started_at: Some("2026-04-02T11:02:00Z".to_string()),
+        finished_at: Some("2026-04-02T11:02:10Z".to_string()),
+        node_count: Some(3),
+        error_code: None,
+        error_message: None,
+    })?;
+
+    assert_eq!(
+        refresh_repository.mark_running_failed_by_source(
+            &source.id,
+            "2026-04-02T11:03:00Z",
+            "E_INTERNAL",
+            "source refresh superseded",
+        )?,
+        2
+    );
+
+    let jobs = refresh_repository.list_by_source(&source.id)?;
+    let running = jobs
+        .iter()
+        .filter(|job| job.status == "running")
+        .collect::<Vec<_>>();
+    assert!(running.is_empty());
+
+    let failed = jobs
+        .iter()
+        .filter(|job| job.status == "failed")
+        .collect::<Vec<_>>();
+    assert_eq!(failed.len(), 2);
+    assert!(failed.iter().all(|job| {
+        job.error_code.as_deref() == Some("E_INTERNAL")
+            && job.error_message.as_deref() == Some("source refresh superseded")
+    }));
+
+    let success = jobs
+        .iter()
+        .find(|job| job.id == "refresh-job-success-existing")
+        .expect("existing success job should remain");
+    assert_eq!(success.status, "success");
+
+    Ok(())
+}
+
+#[test]
 fn refresh_job_repository_supports_filtered_pagination() -> StorageResult<()> {
     let db = Database::open_in_memory()?;
     let source_repository = SourceRepository::new(&db);

@@ -64,6 +64,13 @@ impl<'a> Engine<'a> {
             OffsetDateTime::now_utc().unix_timestamp_nanos()
         );
         let refresh_repository = RefreshJobRepository::new(self.db);
+        let stale_finished_at = finished_at_timestamp();
+        let _ = refresh_repository.mark_running_failed_by_source(
+            source_id,
+            &stale_finished_at,
+            "E_INTERNAL",
+            "来源存在未完成任务，已由新刷新请求接管",
+        );
         refresh_repository.insert(&RefreshJob {
             id: refresh_job_id.clone(),
             source_instance_id: source_id.to_string(),

@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::CoreError;
 use crate::CoreResult;
 
-use super::{build_proxy_node, try_decode_base64_text};
+use super::{build_proxy_node, decode_percent_encoded, try_decode_base64_text};
 
 pub(crate) fn parse_vmess_uri(
     line: &str,
@@ -33,11 +33,7 @@ pub(crate) fn parse_vmess_uri(
                 .or_else(|| value.as_str().and_then(|raw| raw.parse::<u16>().ok()))
         })
         .ok_or_else(|| CoreError::SubscriptionParse("vmess 缺少有效 port".to_string()))?;
-    let name = payload
-        .get("ps")
-        .and_then(Value::as_str)
-        .unwrap_or("vmess")
-        .to_string();
+    let name = decode_percent_encoded(payload.get("ps").and_then(Value::as_str).unwrap_or("vmess"));
     let transport = match payload.get("net").and_then(Value::as_str) {
         Some("ws") => ProxyTransport::Ws,
         Some("grpc") => ProxyTransport::Grpc,

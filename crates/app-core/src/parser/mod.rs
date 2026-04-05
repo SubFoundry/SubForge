@@ -105,4 +105,6 @@ pub(crate) fn parse_proxy_uri_line(
     )))
 }
 
-pub(crate) use common::{build_proxy_node, map_transport, parse_host_port, split_fragment};
+pub(crate) use common::{
+    build_proxy_node, decode_percent_encoded, map_transport, parse_host_port, split_fragment,
+};
