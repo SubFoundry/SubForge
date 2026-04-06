@@ -158,13 +158,29 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
           setHeartbeatAt(new Date().toISOString());
 
           if (status.running) {
+            const shouldStartEventsBridge =
+              !previousRunning.current || !eventStreamActive;
+            if (shouldStartEventsBridge) {
+              try {
+                await coreEventsStart();
+              } catch (error) {
+                if (!cancelled) {
+                  setEventStreamActive(false);
+                  setError(
+                    error instanceof Error
+                      ? error.message
+                      : "Core 事件流重连失败",
+                  );
+                }
+              }
+            }
+
             if (!previousRunning.current) {
               addToast({
                 title: "Core 已重连",
                 description: "管理连接恢复，可继续操作。",
                 variant: "default",
               });
-              await coreEventsStart();
             }
             const health = await fetchCoreHealth();
             if (!cancelled) {
@@ -193,7 +209,15 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [addToast, setError, setEventStreamActive, setHeartbeatAt, setPhase, setStatus]);
+  }, [
+    addToast,
+    eventStreamActive,
+    setError,
+    setEventStreamActive,
+    setHeartbeatAt,
+    setPhase,
+    setStatus,
+  ]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
