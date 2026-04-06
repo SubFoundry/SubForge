@@ -15,6 +15,10 @@ import {
 } from "../../lib/query-cache";
 import { queryKeys } from "../../lib/query-keys";
 import { useCoreUiStore } from "../../stores/core-ui-store";
+import {
+  InlineActionFeedback,
+  type InlineActionState,
+} from "../../components/inline-action-feedback";
 import type { ProfileItem, ProfileListResponse } from "../../types/core";
 import { type ProfileFormMode } from "./constants";
 import { ProfileFormCard } from "./profile-form-card";
@@ -34,6 +38,11 @@ export default function ProfilesPage() {
   const [formDescription, setFormDescription] = useState("");
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  const [inlineAction, setInlineAction] = useState<InlineActionState>({
+    phase: "idle",
+    title: "",
+    description: "",
+  });
 
   const baseUrl = status?.baseUrl || "http://127.0.0.1:18118";
 
@@ -62,6 +71,11 @@ export default function ProfilesPage() {
   const createMutation = useMutation({
     mutationFn: createProfile,
     onMutate: async (input) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在创建 Profile",
+        description: `已提交 ${input.name}，等待 Core 确认。`,
+      });
       await queryClient.cancelQueries({ queryKey: queryKeys.profiles.all });
       const previousProfiles = queryClient.getQueryData<ProfileListResponse>(
         queryKeys.profiles.all,
@@ -97,6 +111,11 @@ export default function ProfilesPage() {
         description: payload.profile.profile.name,
         variant: "default",
       });
+      setInlineAction({
+        phase: "success",
+        title: "Profile 创建成功",
+        description: `${payload.profile.profile.name} 已可用于导出。`,
+      });
       resetForm();
     },
     onError: (error, _input, context) => {
@@ -107,6 +126,11 @@ export default function ProfilesPage() {
         title: "Profile 创建失败",
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "Profile 创建失败",
+        description: error instanceof Error ? error.message : "未知错误",
       });
     },
     onSettled: () => {
@@ -129,6 +153,11 @@ export default function ProfilesPage() {
         sourceIds: input.sourceIds,
       }),
     onMutate: async (input) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在保存 Profile",
+        description: `正在更新 ${input.name}。`,
+      });
       await queryClient.cancelQueries({ queryKey: queryKeys.profiles.all });
       const previousProfiles = queryClient.getQueryData<ProfileListResponse>(
         queryKeys.profiles.all,
@@ -152,6 +181,11 @@ export default function ProfilesPage() {
         description: payload.profile.profile.name,
         variant: "default",
       });
+      setInlineAction({
+        phase: "success",
+        title: "Profile 保存成功",
+        description: `${payload.profile.profile.name} 已同步最新配置。`,
+      });
     },
     onError: (error, _input, context) => {
       if (context) {
@@ -161,6 +195,11 @@ export default function ProfilesPage() {
         title: "Profile 更新失败",
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "Profile 保存失败",
+        description: error instanceof Error ? error.message : "未知错误",
       });
     },
     onSettled: () => {
@@ -173,6 +212,13 @@ export default function ProfilesPage() {
 
   const rotateMutation = useMutation({
     mutationFn: rotateProfileExportToken,
+    onMutate: () => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在轮换 Token",
+        description: "请求已提交，等待 Core 返回新的导出 token。",
+      });
+    },
     onSuccess: (payload) => {
       queryClient.setQueryData<ProfileListResponse | undefined>(
         queryKeys.profiles.all,
@@ -187,12 +233,22 @@ export default function ProfilesPage() {
         description: `旧链接将在 ${formatTimestamp(payload.previous_token_expires_at)} 失效。`,
         variant: "warning",
       });
+      setInlineAction({
+        phase: "success",
+        title: "Token 轮换成功",
+        description: `旧 token 将在 ${formatTimestamp(payload.previous_token_expires_at)} 失效。`,
+      });
     },
     onError: (error) => {
       addToast({
         title: "Token 轮换失败",
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "Token 轮换失败",
+        description: error instanceof Error ? error.message : "未知错误",
       });
     },
     onSettled: () => {
@@ -206,6 +262,11 @@ export default function ProfilesPage() {
   const deleteMutation = useMutation({
     mutationFn: deleteProfile,
     onMutate: async (profileId) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在删除 Profile",
+        description: `Profile ${profileId} 删除请求已提交。`,
+      });
       await queryClient.cancelQueries({ queryKey: queryKeys.profiles.all });
       const previousProfiles = queryClient.getQueryData<ProfileListResponse>(
         queryKeys.profiles.all,
@@ -221,6 +282,11 @@ export default function ProfilesPage() {
         description: "关联导出地址已失效。",
         variant: "warning",
       });
+      setInlineAction({
+        phase: "success",
+        title: "Profile 删除成功",
+        description: "关联导出地址已失效。",
+      });
       if (formMode === "edit") {
         resetForm();
       }
@@ -233,6 +299,11 @@ export default function ProfilesPage() {
         title: "Profile 删除失败",
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "Profile 删除失败",
+        description: error instanceof Error ? error.message : "未知错误",
       });
     },
     onSettled: () => {
@@ -356,6 +427,7 @@ export default function ProfilesPage() {
           新建 Profile
         </button>
       </header>
+      <InlineActionFeedback state={inlineAction} />
 
       <ProfileFormCard
         mode={formMode}

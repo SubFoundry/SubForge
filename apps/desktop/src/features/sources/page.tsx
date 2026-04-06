@@ -16,6 +16,7 @@ import {
   type SourceFormMode,
 } from "./utils";
 import { queryKeys } from "../../lib/query-keys";
+import { InlineActionFeedback } from "../../components/inline-action-feedback";
 
 type SourceListItem = SourceListResponse["sources"][number];
 
@@ -101,6 +102,7 @@ export default function SourcesPage() {
 
   const {
     activeSourceId,
+    inlineAction,
     setActiveSourceId,
     createMutation,
     updateMutation,
@@ -243,6 +245,7 @@ export default function SourcesPage() {
           新建来源
         </button>
       </header>
+      <InlineActionFeedback state={inlineAction} />
 
       <SourceFormCard
         mode={formMode}

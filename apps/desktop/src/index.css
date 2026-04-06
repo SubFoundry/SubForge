@@ -295,6 +295,39 @@ body {
   background: var(--danger-soft);
 }
 
+.ui-inline-feedback {
+  border-radius: var(--radius-soft);
+  border: 1px solid var(--panel-border);
+  padding: 0.6rem 0.8rem;
+}
+
+.ui-inline-feedback-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.ui-inline-feedback-desc {
+  margin: 0.2rem 0 0;
+  font-size: 0.74rem;
+  color: var(--muted-text);
+}
+
+.ui-inline-feedback-loading {
+  background: color-mix(in srgb, var(--panel-muted) 58%, transparent);
+}
+
+.ui-inline-feedback-success {
+  border-color: color-mix(in srgb, rgb(16 185 129) 45%, var(--panel-border));
+  background: color-mix(in srgb, rgba(16, 185, 129, 0.16) 80%, transparent);
+}
+
+.ui-inline-feedback-error {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
 .ui-focus:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 78%, transparent);
@@ -318,5 +351,16 @@ input[type="radio"]:focus-visible {
 
   .ui-card-body {
     margin-top: 0.72rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .ui-btn {
+    min-height: 2rem;
+    font-size: 0.75rem;
+  }
+
+  .ui-page-header {
+    gap: 0.6rem;
   }
 }

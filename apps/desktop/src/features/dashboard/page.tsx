@@ -1,6 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Skeleton } from "../../components/skeleton";
+import {
+  InlineActionFeedback,
+  type InlineActionState,
+} from "../../components/inline-action-feedback";
 import { formatTimestamp } from "../../lib/ui";
 import {
   fetchRefreshLogs,
@@ -39,6 +43,11 @@ export default function DashboardPage() {
   const error = useCoreUiStore((state) => state.error);
   const addToast = useCoreUiStore((state) => state.addToast);
   const queryClient = useQueryClient();
+  const [inlineAction, setInlineAction] = useState<InlineActionState>({
+    phase: "idle",
+    title: "",
+    description: "",
+  });
 
   const systemStatusQuery = useQuery({
     queryKey: queryKeys.dashboard.systemStatus,
@@ -63,6 +72,13 @@ export default function DashboardPage() {
 
   const refreshAllMutation = useMutation({
     mutationFn: refreshAllSources,
+    onMutate: () => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在刷新全部来源",
+        description: "已下发刷新任务，等待 Core 返回执行结果。",
+      });
+    },
     onSuccess: (result) => {
       const failedCount = result.failed.length;
       const successCount = result.succeeded.length;
@@ -74,6 +90,14 @@ export default function DashboardPage() {
             : `已触发 ${successCount} 个来源刷新任务。`,
         variant: failedCount > 0 ? "warning" : "default",
       });
+      setInlineAction({
+        phase: failedCount > 0 ? "error" : "success",
+        title: failedCount > 0 ? "刷新已完成（部分失败）" : "刷新全部成功",
+        description:
+          failedCount > 0
+            ? `成功 ${successCount} 个，失败 ${failedCount} 个。`
+            : `成功触发 ${successCount} 个来源刷新任务。`,
+      });
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.logsRoot });
     },
@@ -83,6 +107,12 @@ export default function DashboardPage() {
         description:
           mutationError instanceof Error ? mutationError.message : "调用来源刷新接口失败。",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "刷新全部失败",
+        description:
+          mutationError instanceof Error ? mutationError.message : "调用来源刷新接口失败。",
       });
     },
   });
@@ -117,6 +147,7 @@ export default function DashboardPage() {
           </button>
         </div>
       </header>
+      <InlineActionFeedback state={inlineAction} />
 
       {isBooting ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

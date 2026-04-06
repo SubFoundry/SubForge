@@ -8,6 +8,10 @@ import {
 import { useCoreUiStore } from "../../stores/core-ui-store";
 import type { WindowCloseBehavior } from "../../types/core";
 import { CLOSE_BEHAVIOR_OPTIONS } from "./constants";
+import {
+  InlineActionFeedback,
+  type InlineActionState,
+} from "../../components/inline-action-feedback";
 
 export default function SettingsPage() {
   const theme = useCoreUiStore((state) => state.theme);
@@ -30,6 +34,11 @@ export default function SettingsPage() {
   const [closeBehaviorInput, setCloseBehaviorInput] = useState<WindowCloseBehavior>(
     windowCloseBehavior,
   );
+  const [inlineAction, setInlineAction] = useState<InlineActionState>({
+    phase: "idle",
+    title: "",
+    description: "",
+  });
 
   useEffect(() => {
     setIdleMinutesInput(String(idleAutoCloseMinutes));
@@ -42,12 +51,24 @@ export default function SettingsPage() {
   const updateThemeMutation = useMutation({
     mutationFn: (nextTheme: "dark" | "light") =>
       updateSystemSettings({ theme: nextTheme }),
+    onMutate: (nextTheme) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在保存主题",
+        description: `正在切换到${nextTheme === "dark" ? "深色" : "浅色"}主题。`,
+      });
+    },
     onSuccess: (_, nextTheme) => {
       setTheme(nextTheme);
       addToast({
         title: "主题已更新",
         description: `已持久化为 ${nextTheme === "dark" ? "深色" : "浅色"} 主题。`,
         variant: "default",
+      });
+      setInlineAction({
+        phase: "success",
+        title: "主题保存成功",
+        description: `当前主题：${nextTheme === "dark" ? "深色" : "浅色"}。`,
       });
     },
     onError: (error) => {
@@ -56,11 +77,23 @@ export default function SettingsPage() {
         description: error instanceof Error ? error.message : "Core 设置接口调用失败。",
         variant: "error",
       });
+      setInlineAction({
+        phase: "error",
+        title: "主题保存失败",
+        description: error instanceof Error ? error.message : "Core 设置接口调用失败。",
+      });
     },
   });
 
   const autostartMutation = useMutation({
     mutationFn: (enabled: boolean) => desktopSetAutostart(enabled),
+    onMutate: (enabled) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在更新开机自启",
+        description: enabled ? "启用中..." : "关闭中...",
+      });
+    },
     onSuccess: (enabled) => {
       setAutostartEnabled(enabled);
       addToast({
@@ -70,6 +103,11 @@ export default function SettingsPage() {
           : "系统启动时将不再自动启动 SubForge Desktop。",
         variant: "default",
       });
+      setInlineAction({
+        phase: "success",
+        title: "开机自启已更新",
+        description: enabled ? "当前为启用状态。" : "当前为关闭状态。",
+      });
     },
     onError: (error) => {
       addToast({
@@ -77,11 +115,23 @@ export default function SettingsPage() {
         description: error instanceof Error ? error.message : "调用系统开机自启接口失败。",
         variant: "error",
       });
+      setInlineAction({
+        phase: "error",
+        title: "开机自启设置失败",
+        description: error instanceof Error ? error.message : "调用系统开机自启接口失败。",
+      });
     },
   });
 
   const refreshAutostartMutation = useMutation({
     mutationFn: desktopGetAutostart,
+    onMutate: () => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在读取开机自启状态",
+        description: "请稍候...",
+      });
+    },
     onSuccess: (enabled) => {
       setAutostartEnabled(enabled);
       addToast({
@@ -89,12 +139,22 @@ export default function SettingsPage() {
         description: enabled ? "当前为启用状态。" : "当前为关闭状态。",
         variant: "default",
       });
+      setInlineAction({
+        phase: "success",
+        title: "开机自启状态已刷新",
+        description: enabled ? "当前为启用状态。" : "当前为关闭状态。",
+      });
     },
     onError: (error) => {
       addToast({
         title: "开机自启状态读取失败",
         description: error instanceof Error ? error.message : "读取失败，请稍后重试。",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "读取开机自启状态失败",
+        description: error instanceof Error ? error.message : "读取失败，请稍后重试。",
       });
     },
   });
@@ -112,6 +172,13 @@ export default function SettingsPage() {
         gui_close_behavior: nextCloseBehavior,
         tray_minimize: nextCloseBehavior === "tray_minimize" ? "true" : "false",
       }),
+    onMutate: (payload) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在保存 GUI 行为",
+        description: `空闲关闭 ${payload.nextIdleMinutes} 分钟，关闭行为 ${payload.nextCloseBehavior}。`,
+      });
+    },
     onSuccess: (_, payload) => {
       setIdleAutoCloseMinutes(payload.nextIdleMinutes);
       setWindowCloseBehavior(payload.nextCloseBehavior);
@@ -120,12 +187,22 @@ export default function SettingsPage() {
         description: "空闲自动关闭和窗口关闭行为已更新。",
         variant: "default",
       });
+      setInlineAction({
+        phase: "success",
+        title: "GUI 行为设置已保存",
+        description: "空闲自动关闭与关闭窗口行为已同步。",
+      });
     },
     onError: (error) => {
       addToast({
         title: "GUI 行为设置保存失败",
         description: error instanceof Error ? error.message : "Core 设置接口调用失败。",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "GUI 行为设置保存失败",
+        description: error instanceof Error ? error.message : "Core 设置接口调用失败。",
       });
     },
   });
@@ -199,6 +276,7 @@ export default function SettingsPage() {
         </div>
         <span className="ui-badge ui-badge-muted">Desktop Runtime</span>
       </header>
+      <InlineActionFeedback state={inlineAction} />
 
       <article className="ui-card">
         <h3 className="ui-card-title">外观主题</h3>

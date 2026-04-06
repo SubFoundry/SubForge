@@ -1,6 +1,7 @@
 import { useMutation, type QueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { createSource, deleteSource, refreshSource, updateSource } from "../../lib/api";
+import type { InlineActionState } from "../../components/inline-action-feedback";
 import {
   patchSourceItem,
   patchSystemStatus,
@@ -25,10 +26,20 @@ export function useSourceActions({
   onCreateSuccess,
 }: UseSourceActionsOptions) {
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const [inlineAction, setInlineAction] = useState<InlineActionState>({
+    phase: "idle",
+    title: "",
+    description: "",
+  });
 
   const createMutation = useMutation({
     mutationFn: createSource,
     onMutate: async (input) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在创建来源",
+        description: `已提交 ${input.name}，等待 Core 确认。`,
+      });
       await queryClient.cancelQueries({ queryKey: queryKeys.sources.all });
       await queryClient.cancelQueries({ queryKey: queryKeys.dashboard.systemStatus });
 
@@ -79,6 +90,11 @@ export function useSourceActions({
         description: payload.source.source.name,
         variant: "default",
       });
+      setInlineAction({
+        phase: "success",
+        title: "来源创建成功",
+        description: `${payload.source.source.name} 已进入列表并完成本地同步。`,
+      });
       onCreateSuccess();
     },
     onError: (error, _input, context) => {
@@ -94,6 +110,11 @@ export function useSourceActions({
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
       });
+      setInlineAction({
+        phase: "error",
+        title: "来源创建失败",
+        description: error instanceof Error ? error.message : "未知错误",
+      });
     },
     onSettled: () => {
       if (eventDrivenSyncEnabled) {
@@ -108,6 +129,11 @@ export function useSourceActions({
     mutationFn: (input: { sourceId: string; name: string; config: Record<string, unknown> }) =>
       updateSource(input.sourceId, { name: input.name, config: input.config }),
     onMutate: async (input) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在保存来源",
+        description: `正在更新 ${input.name}。`,
+      });
       await queryClient.cancelQueries({ queryKey: queryKeys.sources.all });
       const previousSources = queryClient.getQueryData<SourceListResponse>(
         queryKeys.sources.all,
@@ -134,6 +160,11 @@ export function useSourceActions({
         description: payload.source.source.name,
         variant: "default",
       });
+      setInlineAction({
+        phase: "success",
+        title: "来源保存完成",
+        description: `${payload.source.source.name} 已同步到最新配置。`,
+      });
     },
     onError: (error, _input, context) => {
       if (context) {
@@ -143,6 +174,11 @@ export function useSourceActions({
         title: "来源更新失败",
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "来源保存失败",
+        description: error instanceof Error ? error.message : "未知错误",
       });
     },
     onSettled: () => {
@@ -157,6 +193,11 @@ export function useSourceActions({
   const refreshMutation = useMutation({
     mutationFn: (sourceId: string) => refreshSource(sourceId),
     onMutate: async (sourceId) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在刷新来源",
+        description: `来源 ${sourceId} 已进入刷新队列。`,
+      });
       await queryClient.cancelQueries({ queryKey: queryKeys.sources.all });
       const previousSources = queryClient.getQueryData<SourceListResponse>(
         queryKeys.sources.all,
@@ -185,6 +226,11 @@ export function useSourceActions({
         description: `${payload.source_id} 返回 ${payload.node_count} 个节点`,
         variant: "default",
       });
+      setInlineAction({
+        phase: "success",
+        title: "来源刷新完成",
+        description: `${payload.source_id} 返回 ${payload.node_count} 个节点。`,
+      });
     },
     onError: (error, _sourceId, context) => {
       if (context) {
@@ -194,6 +240,11 @@ export function useSourceActions({
         title: "来源刷新失败",
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
+      });
+      setInlineAction({
+        phase: "error",
+        title: "来源刷新失败",
+        description: error instanceof Error ? error.message : "未知错误",
       });
     },
     onSettled: () => {
@@ -210,6 +261,11 @@ export function useSourceActions({
   const deleteMutation = useMutation({
     mutationFn: (sourceId: string) => deleteSource(sourceId),
     onMutate: async (sourceId) => {
+      setInlineAction({
+        phase: "loading",
+        title: "正在删除来源",
+        description: `来源 ${sourceId} 删除请求已提交。`,
+      });
       await queryClient.cancelQueries({ queryKey: queryKeys.sources.all });
       await queryClient.cancelQueries({ queryKey: queryKeys.dashboard.systemStatus });
 
@@ -249,6 +305,11 @@ export function useSourceActions({
         description: "来源记录及其关联缓存已清理。",
         variant: "warning",
       });
+      setInlineAction({
+        phase: "success",
+        title: "来源删除成功",
+        description: "来源记录及关联缓存已完成清理。",
+      });
     },
     onError: (error, _sourceId, context) => {
       if (context) {
@@ -263,6 +324,11 @@ export function useSourceActions({
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
       });
+      setInlineAction({
+        phase: "error",
+        title: "来源删除失败",
+        description: error instanceof Error ? error.message : "未知错误",
+      });
     },
     onSettled: () => {
       if (!eventDrivenSyncEnabled) {
@@ -276,6 +342,7 @@ export function useSourceActions({
 
   return {
     activeSourceId,
+    inlineAction,
     setActiveSourceId,
     createMutation,
     updateMutation,
