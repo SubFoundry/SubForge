@@ -599,7 +599,32 @@ fn clash_template_supports_provider_style_groups_with_filter() {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
     assert_eq!(auto_group_proxies, vec!["HK-01"]);
-    assert!(!yaml.contains("rules:"), "Clash 导出不应包含 rules");
+    let rules = value
+        .get("rules")
+        .and_then(Value::as_array)
+        .expect("模板模式应包含 rules");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].as_str(), Some("MATCH,Proxy"));
+}
+
+#[test]
+fn clash_non_template_path_does_not_emit_rules() {
+    let transformer = ClashTransformer::default();
+    let nodes = vec![build_node(
+        "HK-01",
+        ProxyProtocol::Ss,
+        ProxyTransport::Tcp,
+        Some("hk"),
+        vec![
+            ("cipher", Value::String("aes-128-gcm".to_string())),
+            ("password", Value::String("p@ss".to_string())),
+        ],
+    )];
+
+    let yaml = transformer
+        .transform(&nodes, &test_profile())
+        .expect("非模板模式转换 YAML 失败");
+    assert!(!yaml.contains("\nrules:"), "非模板模式不应输出 rules");
 }
 
 fn assert_snapshot(node: ProxyNode, expected_snapshot: &str) {

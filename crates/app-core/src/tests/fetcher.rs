@@ -151,6 +151,162 @@ async fn static_fetcher_decodes_brotli_subscription_payload() {
     server_task.abort();
 }
 
+#[test]
+fn static_fetcher_extracts_and_persists_clash_routing_template() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let source_repository = SourceRepository::new(&db);
+    source_repository
+        .insert(&sample_source(
+            "source-fetch-template",
+            "subforge.builtin.static",
+        ))
+        .expect("写入来源实例失败");
+
+    let fetcher = StaticFetcher::new(&db).expect("初始化 StaticFetcher 失败");
+    let payload = r#"
+proxies:
+  - name: old-node-a
+    type: ss
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - DIRECT
+      - old-node-a
+  - name: Auto
+    type: url-test
+    proxies:
+      - old-node-a
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+rules:
+  - MATCH,Proxy
+"#;
+    let nodes = fetcher
+        .parse_and_cache_content("source-fetch-template", payload)
+        .expect("缓存模板内容不应失败");
+    assert!(nodes.is_empty(), "Clash YAML 不应被 URI 解析器误解析为节点");
+
+    let repository = SettingsRepository::new(&db);
+    let setting = repository
+        .get("source.source-fetch-template.clash_routing_template")
+        .expect("读取模板设置失败")
+        .expect("应保存 Clash 分流模板");
+    let template: app_common::ClashRoutingTemplate =
+        serde_json::from_str(&setting.value).expect("模板 JSON 反序列化失败");
+    assert_eq!(template.groups.len(), 2);
+    assert_eq!(template.groups[0].name, "Proxy");
+    assert_eq!(template.rules, vec!["MATCH,Proxy".to_string()]);
+}
+
+#[test]
+fn static_fetcher_extracts_singbox_template_and_converts_to_clash_semantics() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let source_repository = SourceRepository::new(&db);
+    source_repository
+        .insert(&sample_source(
+            "source-fetch-template-singbox",
+            "subforge.builtin.static",
+        ))
+        .expect("写入来源实例失败");
+
+    let fetcher = StaticFetcher::new(&db).expect("初始化 StaticFetcher 失败");
+    let payload = r#"
+{
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "Proxy",
+      "outbounds": ["Auto", "DIRECT"]
+    },
+    {
+      "type": "urltest",
+      "tag": "Auto",
+      "outbounds": ["old-node-a"],
+      "url": "http://www.gstatic.com/generate_204",
+      "interval": 300
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "domain_suffix": ["example.com"],
+        "outbound": "Proxy"
+      }
+    ],
+    "final": "Proxy"
+  }
+}
+"#;
+    let nodes = fetcher
+        .parse_and_cache_content("source-fetch-template-singbox", payload)
+        .expect("缓存 sing-box 模板内容不应失败");
+    assert!(
+        nodes.is_empty(),
+        "sing-box 模板不应被 URI 解析器误解析为节点"
+    );
+
+    let repository = SettingsRepository::new(&db);
+    let setting = repository
+        .get("source.source-fetch-template-singbox.clash_routing_template")
+        .expect("读取模板设置失败")
+        .expect("应保存转换后的 Clash 分流模板");
+    let template: app_common::ClashRoutingTemplate =
+        serde_json::from_str(&setting.value).expect("模板 JSON 反序列化失败");
+    assert_eq!(template.groups.len(), 2);
+    assert_eq!(template.groups[0].name, "Proxy");
+    assert_eq!(template.groups[1].group_type, "url-test");
+    assert_eq!(
+        template.rules,
+        vec![
+            "DOMAIN-SUFFIX,example.com,Proxy".to_string(),
+            "MATCH,Proxy".to_string()
+        ]
+    );
+}
+
+#[test]
+fn static_fetcher_clears_template_when_payload_is_not_clash_yaml() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let source_repository = SourceRepository::new(&db);
+    source_repository
+        .insert(&sample_source(
+            "source-fetch-template-clear",
+            "subforge.builtin.static",
+        ))
+        .expect("写入来源实例失败");
+
+    let fetcher = StaticFetcher::new(&db).expect("初始化 StaticFetcher 失败");
+    fetcher
+        .parse_and_cache_content(
+            "source-fetch-template-clear",
+            r#"
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - old-node
+"#,
+        )
+        .expect("首次写入模板应成功");
+    fetcher
+        .parse_and_cache_content(
+            "source-fetch-template-clear",
+            "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@example.com:443#node-a",
+        )
+        .expect("写入 URI 内容应成功");
+
+    let repository = SettingsRepository::new(&db);
+    assert!(
+        repository
+            .get("source.source-fetch-template-clear.clash_routing_template")
+            .expect("读取模板设置失败")
+            .is_none(),
+        "非 Clash YAML 内容应清理模板缓存"
+    );
+}
+
 async fn start_encoded_fixture_server(
     route_path: &'static str,
     body: Vec<u8>,

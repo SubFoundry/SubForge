@@ -44,12 +44,26 @@ impl ClashTransformer {
             proxies.push(proxy::build_clash_proxy(node)?);
         }
 
+        let (proxy_groups, template_applied) = match routing_template {
+            Some(template) => self.build_proxy_groups_from_template(nodes, template),
+            None => (self.build_proxy_groups(nodes), false),
+        };
+        let rules = if template_applied {
+            routing_template.and_then(|template| {
+                if template.rules.is_empty() {
+                    None
+                } else {
+                    Some(template.rules.clone())
+                }
+            })
+        } else {
+            None
+        };
+
         let config = ClashConfig {
             proxies,
-            proxy_groups: match routing_template {
-                Some(template) => self.build_proxy_groups_from_template(nodes, template),
-                None => self.build_proxy_groups(nodes),
-            },
+            proxy_groups,
+            rules,
         };
         Ok(serde_yaml::to_string(&config)?)
     }
@@ -107,7 +121,7 @@ impl ClashTransformer {
         &self,
         nodes: &[ProxyNode],
         routing_template: &ClashRoutingTemplate,
-    ) -> Vec<ClashProxyGroup> {
+    ) -> (Vec<ClashProxyGroup>, bool) {
         let aggregated_node_names = nodes
             .iter()
             .map(|node| node.name.clone())
@@ -182,9 +196,9 @@ impl ClashTransformer {
         }
 
         if groups.is_empty() {
-            self.build_proxy_groups(nodes)
+            (self.build_proxy_groups(nodes), false)
         } else {
-            groups
+            (groups, true)
         }
     }
 }
@@ -252,6 +266,8 @@ struct ClashConfig {
     proxies: Vec<ClashProxy>,
     #[serde(rename = "proxy-groups")]
     proxy_groups: Vec<ClashProxyGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rules: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]

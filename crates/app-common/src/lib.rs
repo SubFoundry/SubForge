@@ -8,8 +8,9 @@ mod tests;
 
 pub use error::{AppError, AppResult, ErrorResponse};
 pub use models::{
-    AppSetting, Plugin, Profile, ProfileSource, ProxyNode, ProxyProtocol, ProxyTransport,
-    SourceInstance, TlsConfig,
+    AppSetting, ClashRoutingTemplate, ClashRoutingTemplateGroup, Plugin, Profile, ProfileSource,
+    ProxyNode, ProxyProtocol, ProxyTransport, RoutingTemplateGroupIr, RoutingTemplateIr,
+    RoutingTemplateSourceKernel, SourceInstance, TlsConfig,
 };
 pub use plugin::{
     ConfigSchema, ConfigSchemaProperty, ConfigSchemaUi, PluginEntrypoints, PluginManifest,

@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use crate::{
     AppError, AppSetting, ConfigSchema, Plugin, PluginManifest, PluginType, Profile, ProfileSource,
-    ProxyNode, ProxyProtocol, ProxyTransport, SourceInstance, TlsConfig,
+    ProxyNode, ProxyProtocol, ProxyTransport, RoutingTemplateGroupIr, RoutingTemplateIr,
+    RoutingTemplateSourceKernel, SourceInstance, TlsConfig,
 };
 
 #[test]
@@ -40,6 +41,7 @@ fn domain_models_are_serializable() {
         id: "profile-1".to_string(),
         name: "Default".to_string(),
         description: Some("默认聚合配置".to_string()),
+        routing_template_source_id: Some("source-1".to_string()),
         created_at: "2026-04-02T00:00:00Z".to_string(),
         updated_at: "2026-04-02T00:00:00Z".to_string(),
     };
@@ -148,4 +150,30 @@ fn config_schema_is_deserializable() {
     assert_eq!(schema.schema_type, "object");
     assert!(schema.properties.contains_key("url"));
     assert_eq!(schema.required, vec!["url".to_string()]);
+}
+
+#[test]
+fn routing_template_ir_can_convert_to_clash_template() {
+    let ir = RoutingTemplateIr {
+        groups: vec![RoutingTemplateGroupIr {
+            name: "Proxy".to_string(),
+            group_type: "select".to_string(),
+            proxies: vec!["Auto".to_string(), "DIRECT".to_string()],
+            url: None,
+            interval: None,
+            tolerance: None,
+            include_all: false,
+            use_provider: false,
+            filter: None,
+            exclude_filter: None,
+        }],
+        rules: vec!["MATCH,Proxy".to_string()],
+        source_kernel: RoutingTemplateSourceKernel::SingBox,
+        meta: None,
+    };
+
+    let template = ir.into_clash_template();
+    assert_eq!(template.groups.len(), 1);
+    assert_eq!(template.groups[0].name, "Proxy");
+    assert_eq!(template.rules, vec!["MATCH,Proxy".to_string()]);
 }
