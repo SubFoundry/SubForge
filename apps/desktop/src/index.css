@@ -17,6 +17,9 @@
   --danger-soft: rgba(251, 113, 133, 0.16);
   --danger-border: rgba(251, 113, 133, 0.38);
   --warn-text: #ffc89c;
+  --shadow-soft: 0 14px 30px rgba(6, 15, 28, 0.26);
+  --radius-card: 1rem;
+  --radius-soft: 0.75rem;
 }
 
 :root[data-theme="light"] {
@@ -33,6 +36,7 @@
   --danger-soft: rgba(245, 101, 101, 0.13);
   --danger-border: rgba(220, 38, 38, 0.28);
   --warn-text: #8a4d13;
+  --shadow-soft: 0 12px 26px rgba(68, 97, 128, 0.14);
 }
 
 * {
@@ -101,8 +105,9 @@ body {
 .ui-card {
   border: 1px solid var(--panel-border);
   background: color-mix(in srgb, var(--panel-muted) 64%, transparent);
-  border-radius: 0.9rem;
-  padding: 0.95rem;
+  border-radius: var(--radius-card);
+  padding: 1rem;
+  box-shadow: var(--shadow-soft);
 }
 
 .ui-card-header {
@@ -114,14 +119,14 @@ body {
 
 .ui-card-title {
   margin: 0;
-  font-size: 0.88rem;
+  font-size: 0.9rem;
   font-weight: 600;
   color: var(--app-text);
 }
 
 .ui-card-desc {
   margin-top: 0.35rem;
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   color: var(--muted-text);
 }
 
@@ -234,6 +239,60 @@ body {
   background: rgba(148, 163, 184, 0.12);
   color: rgb(203 213 225);
   border-color: rgba(148, 163, 184, 0.32);
+}
+
+.ui-state {
+  border-radius: var(--radius-soft);
+  border: 1px dashed var(--panel-border);
+  padding: 0.8rem 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ui-state-title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.ui-state-desc {
+  margin: 0.22rem 0 0;
+  font-size: 0.76rem;
+  color: var(--muted-text);
+}
+
+.ui-state-copy {
+  min-width: 0;
+}
+
+.ui-state-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ui-state-loading {
+  background: color-mix(in srgb, var(--panel-muted) 58%, transparent);
+}
+
+.ui-state-empty {
+  background: color-mix(in srgb, var(--panel-bg) 82%, transparent);
+}
+
+.ui-state-success {
+  border-style: solid;
+  border-color: color-mix(in srgb, rgb(16 185 129) 45%, var(--panel-border));
+  background: color-mix(in srgb, rgba(16, 185, 129, 0.16) 80%, transparent);
+}
+
+.ui-state-error {
+  border-style: solid;
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
 }
 
 .ui-focus:focus-visible {

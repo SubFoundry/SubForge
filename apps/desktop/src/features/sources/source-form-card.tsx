@@ -1,4 +1,5 @@
 import { Skeleton } from "../../components/skeleton";
+import { StatePanel } from "../../components/state-panel";
 import type { ConfigSchemaProperty, PluginRecord, PluginSchemaResponse } from "../../types/core";
 import type { SourceFormMode } from "./utils";
 import { SourceField } from "./source-field";
@@ -10,6 +11,7 @@ type SourceFormCardProps = {
   enabledPlugins: PluginRecord[];
   schemaPayload?: PluginSchemaResponse;
   schemaLoading: boolean;
+  schemaErrorMessage?: string | null;
   fields: Array<{ key: string; property: ConfigSchemaProperty }>;
   formConfig: Record<string, unknown>;
   keptSecretFields: string[];
@@ -30,6 +32,7 @@ export function SourceFormCard({
   enabledPlugins,
   schemaPayload,
   schemaLoading,
+  schemaErrorMessage,
   fields,
   formConfig,
   keptSecretFields,
@@ -86,10 +89,18 @@ export function SourceFormCard({
             <Skeleton className="h-12" />
             <Skeleton className="h-12" />
           </div>
+        ) : schemaErrorMessage ? (
+          <StatePanel
+            variant="error"
+            title="Schema 加载失败"
+            description={schemaErrorMessage}
+          />
         ) : !schemaPayload ? (
-          <p className="text-sm text-[var(--muted-text)]">
-            请先选择插件，随后按 Schema 渲染配置表单。
-          </p>
+          <StatePanel
+            variant="empty"
+            title="等待插件选择"
+            description="先选择一个可用插件，系统会根据 schema 自动渲染来源配置字段。"
+          />
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {fields.map(({ key, property }) => (

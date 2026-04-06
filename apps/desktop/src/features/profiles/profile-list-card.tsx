@@ -1,4 +1,4 @@
-import { Skeleton } from "../../components/skeleton";
+import { StatePanel, StateSkeletonRows } from "../../components/state-panel";
 import type { ProfileItem } from "../../types/core";
 import { SUBSCRIPTION_FORMATS } from "./constants";
 import { buildSubscriptionUrl, formatTimestamp } from "./utils";
@@ -41,12 +41,13 @@ export function ProfileListCard({
 
       <div className="ui-card-body">
         {loading ? (
-          <div className="space-y-3">
-            <Skeleton className="h-32" />
-            <Skeleton className="h-32" />
-          </div>
+          <StateSkeletonRows rows={2} />
         ) : profiles.length === 0 ? (
-          <p className="text-sm text-[var(--muted-text)]">暂无 Profile，请先创建。</p>
+          <StatePanel
+            variant="empty"
+            title="还没有 Profile"
+            description="创建 Profile 后即可获得四种格式的导出地址。"
+          />
         ) : (
           <div className="space-y-3">
             {profiles.map((item) => {

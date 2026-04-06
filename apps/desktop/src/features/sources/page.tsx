@@ -251,6 +251,13 @@ export default function SourcesPage() {
         enabledPlugins={enabledPlugins}
         schemaPayload={pluginSchemaQuery.data}
         schemaLoading={pluginSchemaQuery.isLoading}
+        schemaErrorMessage={
+          pluginSchemaQuery.isError
+            ? pluginSchemaQuery.error instanceof Error
+              ? pluginSchemaQuery.error.message
+              : "插件 schema 拉取失败，请稍后重试。"
+            : null
+        }
         fields={fields}
         formConfig={formConfig}
         keptSecretFields={keptSecretFields}

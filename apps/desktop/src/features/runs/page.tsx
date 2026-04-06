@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { Skeleton } from "../../components/skeleton";
+import { StatePanel, StateSkeletonRows } from "../../components/state-panel";
 import { fetchRefreshLogs, fetchSources } from "../../lib/api";
 import { queryKeys } from "../../lib/query-keys";
 import { formatTimestamp, statusToneClass } from "../../lib/ui";
@@ -70,6 +70,7 @@ export default function RunsPage() {
   const totalPages = Math.max(1, Math.ceil(pagination.total / PAGE_SIZE));
   const hasPreviousPage = page > 1;
   const hasNextPage = pagination.hasMore;
+  const summary = useMemo(() => summarizeLogs(logs), [logs]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -141,17 +142,33 @@ export default function RunsPage() {
         </div>
       </article>
 
+      <article className="grid gap-3 md:grid-cols-3">
+        <MetricCard label="当前页运行中" value={summary.running} />
+        <MetricCard label="当前页成功" value={summary.success} />
+        <MetricCard label="当前页失败" value={summary.failed} />
+      </article>
+
       <article className="ui-card">
         {logsQuery.isLoading ? (
-          <div className="space-y-2">
-            <Skeleton className="h-16" />
-            <Skeleton className="h-16" />
-            <Skeleton className="h-16" />
-          </div>
+          <StateSkeletonRows rows={3} />
+        ) : logsQuery.isError ? (
+          <StatePanel
+            variant="error"
+            title="运行记录加载失败"
+            description={
+              logsQuery.error instanceof Error
+                ? logsQuery.error.message
+                : "请稍后重试或检查 Core 状态。"
+            }
+          />
         ) : logs.length === 0 ? (
-          <p className="text-sm text-[var(--muted-text)]">暂无匹配的运行记录。</p>
+          <StatePanel
+            variant="empty"
+            title="没有匹配记录"
+            description="可调整状态筛选、来源筛选或切回第一页查看最近任务。"
+          />
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {logs.map((log) => (
               <RunItem
                 key={log.id}
@@ -207,20 +224,24 @@ function RunItem({
   const hasDetails = hasRunDetails(log);
 
   return (
-    <article className="rounded-lg border border-[var(--panel-border)] bg-[var(--panel-bg)]/55 px-3 py-3 text-sm">
+    <article className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel-bg)]/55 px-4 py-3 text-sm shadow-[var(--shadow-soft)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="font-medium text-[var(--app-text)]">{log.sourceName ?? log.sourceId}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-medium text-[var(--app-text)]">{log.sourceName ?? log.sourceId}</p>
+            <span className={`ui-badge ${statusToneClass(log.status)}`}>{log.status}</span>
+          </div>
           <p className="mt-1 text-xs text-[var(--muted-text)]">
-            触发：{log.triggerType} | 开始：{formatTimestamp(log.startedAt)} | 结束：
-            {formatTimestamp(log.finishedAt)}
+            触发：{log.triggerType}
+          </p>
+          <p className="mt-1 text-xs text-[var(--muted-text)]">
+            开始：{formatTimestamp(log.startedAt)} | 结束：{formatTimestamp(log.finishedAt)}
           </p>
           <p className="mt-1 text-xs text-[var(--muted-text)]">
             节点：{log.nodeCount ?? "-"} | 耗时：{durationText}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`ui-badge ${statusToneClass(log.status)}`}>{log.status}</span>
           {hasDetails && (
             <button
               type="button"
@@ -298,4 +319,37 @@ function formatDuration(
   const minutes = Math.floor(seconds / 60);
   const remain = seconds % 60;
   return `${minutes}m ${remain}s`;
+}
+
+function summarizeLogs(logs: RefreshLog[]): {
+  running: number;
+  success: number;
+  failed: number;
+} {
+  let running = 0;
+  let success = 0;
+  let failed = 0;
+  for (const log of logs) {
+    if (log.status === "running") {
+      running += 1;
+      continue;
+    }
+    if (log.status === "success") {
+      success += 1;
+      continue;
+    }
+    if (log.status === "failed") {
+      failed += 1;
+    }
+  }
+  return { running, success, failed };
+}
+
+function MetricCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl border border-[var(--panel-border)] bg-[var(--panel-bg)]/55 px-4 py-3 shadow-[var(--shadow-soft)]">
+      <p className="text-xs uppercase tracking-wide text-[var(--muted-text)]">{label}</p>
+      <p className="mt-2 text-2xl font-semibold text-[var(--app-text)]">{value}</p>
+    </div>
+  );
 }
