@@ -1,12 +1,20 @@
-﻿use app_common::ProxyNode;
+use app_common::ProxyNode;
 use app_storage::{Database, NodeCacheRepository};
 use app_transport::{NetworkProfileFactory, TransportProfile};
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use reqwest::{Client as HttpClient, Url};
 use tokio::time::sleep;
 
 use crate::utils::now_rfc3339;
 use crate::{CoreError, CoreResult, SubscriptionParser, UriListParser};
+
+mod content_decode;
+mod request_guard;
+
+use content_decode::decode_response_body;
+pub(crate) use request_guard::{
+    redact_headers_for_log, redact_url_for_log, sanitize_reqwest_error, validate_content_type,
+};
 
 const MAX_SUBSCRIPTION_BYTES: usize = 10 * 1024 * 1024;
 const SUBSCRIPTION_USERINFO_HEADER: &str = "subscription-userinfo";
@@ -180,20 +188,27 @@ where
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
+        let content_encoding = response
+            .headers()
+            .get(reqwest::header::CONTENT_ENCODING)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
 
         let bytes = response
             .bytes()
             .await
             .map_err(|error| CoreError::SubscriptionFetch(error.to_string()))?;
-        if bytes.len() > MAX_SUBSCRIPTION_BYTES {
+        let decoded_bytes = decode_response_body(bytes.to_vec(), content_encoding.as_deref())
+            .map_err(CoreError::SubscriptionFetch)?;
+        if decoded_bytes.len() > MAX_SUBSCRIPTION_BYTES {
             return Err(CoreError::SubscriptionFetch(format!(
                 "上游响应体过大：{} bytes（限制 {} bytes）",
-                bytes.len(),
+                decoded_bytes.len(),
                 MAX_SUBSCRIPTION_BYTES
             )));
         }
 
-        let payload = std::str::from_utf8(&bytes).map_err(|error| {
+        let payload = std::str::from_utf8(&decoded_bytes).map_err(|error| {
             CoreError::SubscriptionParse(format!("订阅内容不是 UTF-8：{error}"))
         })?;
         let nodes = self.parser.parse(source_instance_id, payload)?;
@@ -261,100 +276,4 @@ pub(crate) fn retry_backoff(
     };
     let shift = retry_attempt.saturating_sub(1).min(16);
     base_delay.saturating_mul(1_u32 << shift)
-}
-
-pub(crate) fn redact_url_for_log(url: &Url) -> String {
-    let mut sanitized = url.clone();
-    if url.query().is_none() {
-        return sanitized.to_string();
-    }
-    sanitized.set_query(None);
-    {
-        let mut query = sanitized.query_pairs_mut();
-        for (key, value) in url.query_pairs() {
-            if is_sensitive_query_key(key.as_ref()) {
-                query.append_pair(key.as_ref(), "***");
-            } else {
-                query.append_pair(key.as_ref(), value.as_ref());
-            }
-        }
-    }
-    sanitized.to_string()
-}
-
-pub(crate) fn sanitize_reqwest_error(error: &reqwest::Error, url: &Url) -> String {
-    let message = error.to_string();
-    let redacted_url = redact_url_for_log(url);
-    message.replace(url.as_str(), &redacted_url)
-}
-
-pub(crate) fn redact_headers_for_log(headers: &HeaderMap) -> String {
-    if headers.is_empty() {
-        return "[]".to_string();
-    }
-    let mut pairs = headers
-        .iter()
-        .map(|(name, value)| {
-            let key = name.as_str().to_ascii_lowercase();
-            let value = if is_sensitive_header(&key) {
-                "***".to_string()
-            } else {
-                value.to_str().unwrap_or("<non-utf8>").to_string()
-            };
-            format!("{key}={value}")
-        })
-        .collect::<Vec<_>>();
-    pairs.sort_unstable();
-    format!("[{}]", pairs.join(", "))
-}
-
-pub(crate) fn is_sensitive_query_key(key: &str) -> bool {
-    matches!(
-        key.to_ascii_lowercase().as_str(),
-        "token"
-            | "access_token"
-            | "password"
-            | "passwd"
-            | "secret"
-            | "auth"
-            | "authorization"
-            | "api_key"
-            | "apikey"
-            | "cookie"
-    )
-}
-
-pub(crate) fn is_sensitive_header(key: &str) -> bool {
-    matches!(
-        key.to_ascii_lowercase().as_str(),
-        "authorization"
-            | "proxy-authorization"
-            | "cookie"
-            | "set-cookie"
-            | "x-api-key"
-            | "x-auth-token"
-            | "x-access-token"
-    )
-}
-
-pub(crate) fn validate_content_type(headers: &HeaderMap) -> CoreResult<()> {
-    let Some(content_type) = headers
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return Ok(());
-    };
-
-    let normalized = content_type.to_ascii_lowercase();
-    let allowed = normalized.starts_with("text/")
-        || normalized.starts_with("application/json")
-        || normalized.starts_with("application/octet-stream");
-
-    if allowed {
-        Ok(())
-    } else {
-        Err(CoreError::SubscriptionFetch(format!(
-            "上游 Content-Type 不受支持：{content_type}"
-        )))
-    }
 }

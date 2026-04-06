@@ -8,6 +8,7 @@ proxies:
   alterId: 0
   udp: true
   tls: true
+  sni: tls.example.com
   servername: tls.example.com
   network: ws
   ws-opts:

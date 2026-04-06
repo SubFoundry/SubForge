@@ -13,6 +13,8 @@ app-secrets = { path = "../app-secrets" }
 app-storage = { path = "../app-storage" }
 app-transport = { path = "../app-transport" }
 base64.workspace = true
+brotli.workspace = true
+flate2.workspace = true
 getrandom.workspace = true
 regex.workspace = true
 reqwest.workspace = true

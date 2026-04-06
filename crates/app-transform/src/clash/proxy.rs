@@ -75,14 +75,12 @@ pub(super) fn build_clash_proxy(node: &ProxyNode) -> TransformResult<ClashProxy>
             proxy.cipher = optional_string(node, "cipher").or(Some("auto".to_string()));
             proxy.network = network;
             proxy.flow = None;
-            proxy.sni = None;
         }
         ProxyProtocol::Vless => {
             proxy.proxy_type = "vless".to_string();
             proxy.uuid = Some(required_string(node, "uuid")?);
             proxy.network = network;
             proxy.flow = optional_string(node, "flow");
-            proxy.sni = None;
             proxy.alter_id = None;
             proxy.cipher = None;
         }

@@ -6,6 +6,7 @@ proxies:
   uuid: 22222222-2222-2222-2222-222222222222
   udp: true
   tls: true
+  sni: tls.example.com
   servername: tls.example.com
   network: grpc
   flow: xtls-rprx-vision

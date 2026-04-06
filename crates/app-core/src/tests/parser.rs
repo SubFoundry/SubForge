@@ -1,6 +1,8 @@
 use super::*;
+use app_common::ProxyTransport;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use serde_json::{Value, json};
 
 #[test]
 fn uri_list_parser_supports_base64_and_skips_invalid_lines() {
@@ -55,4 +57,92 @@ vmess://{vmess_payload}"
     assert!(names.contains("美国-02"));
     assert!(names.contains("台湾-03"));
     assert!(names.contains("日本-东京"));
+}
+
+#[test]
+fn uri_list_parser_preserves_transport_tls_and_runtime_fields() {
+    let parser = UriListParser;
+    let vmess_payload = BASE64_STANDARD.encode(
+        r#"{"v":"2","ps":"vmess-node","add":"vmess.example.com","port":"443","id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","aid":"2","net":"ws","host":"edge.vmess.example.com","path":"/vmess","tls":"tls","sni":"sni.vmess.example.com","scy":"auto","fp":"chrome","alpn":"h2,http/1.1","allowInsecure":"1"}"#,
+    );
+    let payload = format!(
+        "vmess://{vmess_payload}\n\
+vless://bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb@vless.example.com:443?type=grpc&security=tls&sni=sni.vless.example.com&serviceName=vless-grpc&alpn=h2%2Chttp%2F1.1&fp=chrome&allowInsecure=1&flow=xtls-rprx-vision#vless-node\n\
+trojan://trojan-pass@trojan.example.com:443?type=ws&sni=sni.trojan.example.com&host=edge.trojan.example.com&path=%2Ftrojan&alpn=h2%2Chttp%2F1.1&allowInsecure=true#trojan-node"
+    );
+
+    let nodes = parser
+        .parse("source-runtime-fields", &payload)
+        .expect("解析带完整参数的节点应成功");
+    assert_eq!(nodes.len(), 3);
+
+    let vmess = nodes
+        .iter()
+        .find(|node| node.protocol == ProxyProtocol::Vmess)
+        .expect("应包含 vmess 节点");
+    assert_eq!(vmess.transport, ProxyTransport::Ws);
+    assert!(vmess.tls.enabled);
+    assert_eq!(
+        vmess.tls.server_name.as_deref(),
+        Some("sni.vmess.example.com")
+    );
+    assert_eq!(
+        vmess.extra.get("host"),
+        Some(&Value::String("edge.vmess.example.com".to_string()))
+    );
+    assert_eq!(
+        vmess.extra.get("path"),
+        Some(&Value::String("/vmess".to_string()))
+    );
+    assert_eq!(
+        vmess.extra.get("skip_cert_verify"),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(vmess.extra.get("alpn"), Some(&json!(["h2", "http/1.1"])));
+
+    let vless = nodes
+        .iter()
+        .find(|node| node.protocol == ProxyProtocol::Vless)
+        .expect("应包含 vless 节点");
+    assert_eq!(vless.transport, ProxyTransport::Grpc);
+    assert!(vless.tls.enabled);
+    assert_eq!(
+        vless.tls.server_name.as_deref(),
+        Some("sni.vless.example.com")
+    );
+    assert_eq!(
+        vless.extra.get("service_name"),
+        Some(&Value::String("vless-grpc".to_string()))
+    );
+    assert_eq!(
+        vless.extra.get("flow"),
+        Some(&Value::String("xtls-rprx-vision".to_string()))
+    );
+    assert_eq!(
+        vless.extra.get("skip_cert_verify"),
+        Some(&Value::Bool(true))
+    );
+
+    let trojan = nodes
+        .iter()
+        .find(|node| node.protocol == ProxyProtocol::Trojan)
+        .expect("应包含 trojan 节点");
+    assert_eq!(trojan.transport, ProxyTransport::Ws);
+    assert!(trojan.tls.enabled);
+    assert_eq!(
+        trojan.tls.server_name.as_deref(),
+        Some("sni.trojan.example.com")
+    );
+    assert_eq!(
+        trojan.extra.get("host"),
+        Some(&Value::String("edge.trojan.example.com".to_string()))
+    );
+    assert_eq!(
+        trojan.extra.get("path"),
+        Some(&Value::String("/trojan".to_string()))
+    );
+    assert_eq!(
+        trojan.extra.get("password"),
+        Some(&Value::String("trojan-pass".to_string()))
+    );
 }
