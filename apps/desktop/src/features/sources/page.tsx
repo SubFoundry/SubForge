@@ -15,6 +15,7 @@ import {
   normalizeFormConfigForSubmit,
   type SourceFormMode,
 } from "./utils";
+import { queryKeys } from "../../lib/query-keys";
 
 type SourceListItem = SourceListResponse["sources"][number];
 
@@ -22,6 +23,7 @@ export default function SourcesPage() {
   const queryClient = useQueryClient();
   const addToast = useCoreUiStore((state) => state.addToast);
   const phase = useCoreUiStore((state) => state.phase);
+  const eventStreamActive = useCoreUiStore((state) => state.eventStreamActive);
 
   const [formMode, setFormMode] = useState<SourceFormMode>("create");
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
@@ -32,17 +34,17 @@ export default function SourcesPage() {
   const initializedFormKeyRef = useRef<string>("");
 
   const pluginsQuery = useQuery({
-    queryKey: ["plugins"],
+    queryKey: queryKeys.plugins.all,
     queryFn: fetchPlugins,
     enabled: phase === "running",
-    refetchInterval: 30_000,
+    refetchInterval: eventStreamActive ? 45_000 : 20_000,
   });
 
   const sourcesQuery = useQuery({
-    queryKey: ["sources"],
+    queryKey: queryKeys.sources.all,
     queryFn: fetchSources,
     enabled: phase === "running",
-    refetchInterval: 15_000,
+    refetchInterval: eventStreamActive ? 40_000 : 15_000,
   });
 
   const enabledPlugins = useMemo(
@@ -65,7 +67,7 @@ export default function SourcesPage() {
   }, [editingSourceId, sourcesQuery.data?.sources]);
 
   const pluginSchemaQuery = useQuery({
-    queryKey: ["source-plugin-schema", formPluginId],
+    queryKey: queryKeys.sources.pluginSchema(formPluginId),
     queryFn: () => fetchPluginSchema(formPluginId),
     enabled: phase === "running" && formPluginId.length > 0,
     staleTime: 60_000,

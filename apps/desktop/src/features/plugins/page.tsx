@@ -6,6 +6,7 @@ import {
   importPluginZip,
   togglePlugin,
 } from "../../lib/api";
+import { queryKeys } from "../../lib/query-keys";
 import { useCoreUiStore } from "../../stores/core-ui-store";
 import type { PluginRecord } from "../../types/core";
 import { PluginImportCard } from "./plugin-import-card";
@@ -15,6 +16,7 @@ export default function PluginsPage() {
   const queryClient = useQueryClient();
   const addToast = useCoreUiStore((state) => state.addToast);
   const phase = useCoreUiStore((state) => state.phase);
+  const eventStreamActive = useCoreUiStore((state) => state.eventStreamActive);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [expandedPluginId, setExpandedPluginId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -22,9 +24,9 @@ export default function PluginsPage() {
   const [activePluginId, setActivePluginId] = useState<string | null>(null);
 
   const pluginsQuery = useQuery({
-    queryKey: ["plugins"],
+    queryKey: queryKeys.plugins.all,
     queryFn: fetchPlugins,
-    refetchInterval: 15_000,
+    refetchInterval: eventStreamActive ? 45_000 : 20_000,
     enabled: phase === "running",
   });
 
@@ -37,7 +39,7 @@ export default function PluginsPage() {
         description: `${plugin.name} (${plugin.plugin_id})`,
         variant: "default",
       });
-      void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "导入插件失败";
@@ -64,7 +66,7 @@ export default function PluginsPage() {
         description: `${plugin.name} (${plugin.plugin_id})`,
         variant: "default",
       });
-      void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
     },
     onError: (error) => {
       addToast({
@@ -86,7 +88,7 @@ export default function PluginsPage() {
         description: `${plugin.name} (${plugin.plugin_id})`,
         variant: "warning",
       });
-      void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
     },
     onError: (error) => {
       addToast({

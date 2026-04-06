@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Skeleton } from "../../components/skeleton";
 import { fetchRefreshLogs, fetchSources } from "../../lib/api";
+import { queryKeys } from "../../lib/query-keys";
 import { formatTimestamp, statusToneClass } from "../../lib/ui";
 import { useCoreUiStore } from "../../stores/core-ui-store";
 import type { RefreshLog } from "../../types/core";
@@ -10,6 +11,7 @@ const PAGE_SIZE = 12;
 
 export default function RunsPage() {
   const phase = useCoreUiStore((state) => state.phase);
+  const eventStreamActive = useCoreUiStore((state) => state.eventStreamActive);
   const [statusFilter, setStatusFilter] = useState<"all" | "running" | "success" | "failed">(
     "all",
   );
@@ -22,14 +24,18 @@ export default function RunsPage() {
   }, [statusFilter, sourceFilter]);
 
   const sourcesQuery = useQuery({
-    queryKey: ["runs", "sources"],
+    queryKey: queryKeys.runs.sources,
     queryFn: fetchSources,
     enabled: phase === "running",
-    refetchInterval: 30_000,
+    refetchInterval: eventStreamActive ? 60_000 : 20_000,
   });
 
   const logsQuery = useQuery({
-    queryKey: ["runs", "logs", statusFilter, sourceFilter, page],
+    queryKey: queryKeys.runs.logs({
+      status: statusFilter,
+      source: sourceFilter,
+      page,
+    }),
     queryFn: () =>
       fetchRefreshLogs({
         limit: PAGE_SIZE,
@@ -39,7 +45,8 @@ export default function RunsPage() {
         includeScriptLogs: true,
       }),
     enabled: phase === "running",
-    refetchInterval: 15_000,
+    refetchInterval:
+      statusFilter === "running" ? 5_000 : eventStreamActive ? 20_000 : 10_000,
   });
 
   const sourceOptions = useMemo(

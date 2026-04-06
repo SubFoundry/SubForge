@@ -8,8 +8,14 @@ import {
   rotateProfileExportToken,
   updateProfile,
 } from "../../lib/api";
+import {
+  patchProfileItem,
+  removeProfileItem,
+  upsertProfileItem,
+} from "../../lib/query-cache";
+import { queryKeys } from "../../lib/query-keys";
 import { useCoreUiStore } from "../../stores/core-ui-store";
-import type { ProfileItem } from "../../types/core";
+import type { ProfileItem, ProfileListResponse } from "../../types/core";
 import { type ProfileFormMode } from "./constants";
 import { ProfileFormCard } from "./profile-form-card";
 import { ProfileListCard } from "./profile-list-card";
@@ -20,6 +26,7 @@ export default function ProfilesPage() {
   const addToast = useCoreUiStore((state) => state.addToast);
   const phase = useCoreUiStore((state) => state.phase);
   const status = useCoreUiStore((state) => state.status);
+  const eventStreamActive = useCoreUiStore((state) => state.eventStreamActive);
 
   const [formMode, setFormMode] = useState<ProfileFormMode>("create");
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
@@ -31,17 +38,17 @@ export default function ProfilesPage() {
   const baseUrl = status?.baseUrl || "http://127.0.0.1:18118";
 
   const profilesQuery = useQuery({
-    queryKey: ["profiles"],
+    queryKey: queryKeys.profiles.all,
     queryFn: fetchProfiles,
     enabled: phase === "running",
-    refetchInterval: 15_000,
+    refetchInterval: eventStreamActive ? 35_000 : 15_000,
   });
 
   const sourcesQuery = useQuery({
-    queryKey: ["sources"],
+    queryKey: queryKeys.sources.all,
     queryFn: fetchSources,
     enabled: phase === "running",
-    refetchInterval: 30_000,
+    refetchInterval: eventStreamActive ? 50_000 : 25_000,
   });
 
   const sourceNameMap = useMemo(() => {
@@ -54,21 +61,56 @@ export default function ProfilesPage() {
 
   const createMutation = useMutation({
     mutationFn: createProfile,
-    onSuccess: (payload) => {
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.profiles.all });
+      const previousProfiles = queryClient.getQueryData<ProfileListResponse>(
+        queryKeys.profiles.all,
+      );
+      const optimisticProfileId = `optimistic-profile-${Date.now()}`;
+      const now = new Date().toISOString();
+
+      queryClient.setQueryData<ProfileListResponse>(queryKeys.profiles.all, (current) =>
+        upsertProfileItem(current, {
+          profile: {
+            id: optimisticProfileId,
+            name: input.name,
+            description: input.description ?? null,
+            created_at: now,
+            updated_at: now,
+          },
+          source_ids: input.sourceIds,
+          export_token: null,
+        }),
+      );
+
+      return { previousProfiles, optimisticProfileId };
+    },
+    onSuccess: (payload, _input, context) => {
+      queryClient.setQueryData<ProfileListResponse>(queryKeys.profiles.all, (current) =>
+        upsertProfileItem(
+          removeProfileItem(current, context?.optimisticProfileId ?? ""),
+          payload.profile,
+        ),
+      );
       addToast({
         title: "Profile 创建成功",
         description: payload.profile.profile.name,
         variant: "default",
       });
       resetForm();
-      void queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },
-    onError: (error) => {
+    onError: (error, _input, context) => {
+      if (context) {
+        queryClient.setQueryData(queryKeys.profiles.all, context.previousProfiles);
+      }
       addToast({
         title: "Profile 创建失败",
         description: error instanceof Error ? error.message : "未知错误",
         variant: "error",
       });
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
     },
   });
 
@@ -84,15 +126,35 @@ export default function ProfilesPage() {
         description: input.description,
         sourceIds: input.sourceIds,
       }),
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.profiles.all });
+      const previousProfiles = queryClient.getQueryData<ProfileListResponse>(
+        queryKeys.profiles.all,
+      );
+      queryClient.setQueryData<ProfileListResponse | undefined>(queryKeys.profiles.all, (current) =>
+        patchProfileItem(current, input.profileId, {
+          name: input.name,
+          description: input.description ?? null,
+          sourceIds: input.sourceIds,
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      return { previousProfiles };
+    },
     onSuccess: (payload) => {
+      queryClient.setQueryData<ProfileListResponse>(queryKeys.profiles.all, (current) =>
+        upsertProfileItem(current, payload.profile),
+      );
       addToast({
         title: "Profile 更新成功",
         description: payload.profile.profile.name,
         variant: "default",
       });
-      void queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },
-    onError: (error) => {
+    onError: (error, _input, context) => {
+      if (context) {
+        queryClient.setQueryData(queryKeys.profiles.all, context.previousProfiles);
+      }
       addToast({
         title: "Profile 更新失败",
         description: error instanceof Error ? error.message : "未知错误",
@@ -100,6 +162,7 @@ export default function ProfilesPage() {
       });
     },
     onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
       setActiveProfileId(null);
     },
   });
@@ -107,12 +170,19 @@ export default function ProfilesPage() {
   const rotateMutation = useMutation({
     mutationFn: rotateProfileExportToken,
     onSuccess: (payload) => {
+      queryClient.setQueryData<ProfileListResponse | undefined>(
+        queryKeys.profiles.all,
+        (current) =>
+        patchProfileItem(current, payload.profile_id, {
+          exportToken: payload.token,
+          updatedAt: new Date().toISOString(),
+        }),
+      );
       addToast({
         title: "导出 Token 已轮换",
         description: `旧链接将在 ${formatTimestamp(payload.previous_token_expires_at)} 失效。`,
         variant: "warning",
       });
-      void queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },
     onError: (error) => {
       addToast({
@@ -122,12 +192,23 @@ export default function ProfilesPage() {
       });
     },
     onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
       setActiveProfileId(null);
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteProfile,
+    onMutate: async (profileId) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.profiles.all });
+      const previousProfiles = queryClient.getQueryData<ProfileListResponse>(
+        queryKeys.profiles.all,
+      );
+      queryClient.setQueryData<ProfileListResponse | undefined>(queryKeys.profiles.all, (current) =>
+        removeProfileItem(current, profileId),
+      );
+      return { previousProfiles };
+    },
     onSuccess: () => {
       addToast({
         title: "Profile 已删除",
@@ -137,9 +218,11 @@ export default function ProfilesPage() {
       if (formMode === "edit") {
         resetForm();
       }
-      void queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },
-    onError: (error) => {
+    onError: (error, _input, context) => {
+      if (context) {
+        queryClient.setQueryData(queryKeys.profiles.all, context.previousProfiles);
+      }
       addToast({
         title: "Profile 删除失败",
         description: error instanceof Error ? error.message : "未知错误",
@@ -147,6 +230,7 @@ export default function ProfilesPage() {
       });
     },
     onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
       setActiveProfileId(null);
     },
   });

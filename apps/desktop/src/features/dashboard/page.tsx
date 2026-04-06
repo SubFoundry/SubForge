@@ -7,6 +7,7 @@ import {
   fetchSystemStatus,
   refreshAllSources,
 } from "../../lib/api";
+import { queryKeys } from "../../lib/query-keys";
 import { useCoreUiStore } from "../../stores/core-ui-store";
 
 function StatusCard({
@@ -40,23 +41,23 @@ export default function DashboardPage() {
   const queryClient = useQueryClient();
 
   const systemStatusQuery = useQuery({
-    queryKey: ["dashboard-system-status", lastRefreshAtFromEvents],
+    queryKey: queryKeys.dashboard.systemStatus,
     queryFn: fetchSystemStatus,
-    refetchInterval: 15_000,
+    refetchInterval: eventStreamActive ? 30_000 : 10_000,
     enabled: status?.running === true,
   });
 
   const recentLogsQuery = useQuery({
-    queryKey: ["dashboard-logs", "recent"],
+    queryKey: queryKeys.dashboard.logsRecent,
     queryFn: () => fetchRefreshLogs({ limit: 10 }),
-    refetchInterval: 15_000,
+    refetchInterval: eventStreamActive ? 20_000 : 12_000,
     enabled: status?.running === true,
   });
 
   const recentErrorLogsQuery = useQuery({
-    queryKey: ["dashboard-logs", "failed"],
+    queryKey: queryKeys.dashboard.logsFailed,
     queryFn: () => fetchRefreshLogs({ limit: 5, status: "failed" }),
-    refetchInterval: 15_000,
+    refetchInterval: eventStreamActive ? 25_000 : 12_000,
     enabled: status?.running === true,
   });
 
@@ -73,8 +74,8 @@ export default function DashboardPage() {
             : `已触发 ${successCount} 个来源刷新任务。`,
         variant: failedCount > 0 ? "warning" : "default",
       });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard-system-status"] });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard-logs"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.logsRoot });
     },
     onError: (mutationError) => {
       addToast({
