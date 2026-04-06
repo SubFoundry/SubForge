@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { type PropsWithChildren, useEffect, useRef } from "react";
 import {
@@ -9,15 +10,25 @@ import {
   fetchCoreHealth,
   fetchSystemSettings,
 } from "../lib/api";
+import { patchSourceItem, patchSystemStatus } from "../lib/query-cache";
+import { queryKeys } from "../lib/query-keys";
 import { notifyDesktopForCoreEvent } from "../lib/desktop-notification";
 import { useCoreUiStore } from "../stores/core-ui-store";
-import type { CoreBridgeEvent, WindowCloseBehavior } from "../types/core";
+import type {
+  CoreBridgeEvent,
+  CoreEventPayload,
+  SourceListResponse,
+  SystemStatusResponse,
+  WindowCloseBehavior,
+} from "../types/core";
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const IDLE_CHECK_INTERVAL_MS = 15_000;
 const DEFAULT_IDLE_AUTO_CLOSE_MINUTES = 30;
+const EVENT_SYNC_DEDUP_WINDOW_MS = 800;
 
 export function CoreConnectionProvider({ children }: PropsWithChildren) {
+  const queryClient = useQueryClient();
   const setPhase = useCoreUiStore((state) => state.setPhase);
   const setStatus = useCoreUiStore((state) => state.setStatus);
   const setError = useCoreUiStore((state) => state.setError);
@@ -40,6 +51,7 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
   const previousRunning = useRef<boolean>(false);
   const lastActivityAt = useRef<number>(Date.now());
   const idleCloseTriggered = useRef<boolean>(false);
+  const eventSyncRegistry = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -246,6 +258,9 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
       }
       if (payload.kind === "event" && payload.payload) {
         pushEvent(payload.payload);
+        if (shouldSyncEvent(eventSyncRegistry.current, payload.payload)) {
+          syncQueryCacheFromCoreEvent(queryClient, payload.payload);
+        }
 
         if (
           payload.payload.event === "refresh:complete" ||
@@ -277,7 +292,14 @@ export function CoreConnectionProvider({ children }: PropsWithChildren) {
         unlisten();
       }
     };
-  }, [addToast, pushEvent, setError, setEventStreamActive, setLastRefreshAt]);
+  }, [
+    addToast,
+    pushEvent,
+    queryClient,
+    setError,
+    setEventStreamActive,
+    setLastRefreshAt,
+  ]);
 
   useEffect(() => {
     const activityEvents: Array<keyof WindowEventMap> = [
@@ -367,4 +389,107 @@ function parseBooleanSetting(rawValue: string | undefined): boolean {
     return false;
   }
   return rawValue.trim().toLowerCase() === "true";
+}
+
+function shouldSyncEvent(
+  registry: Map<string, number>,
+  payload: CoreEventPayload,
+): boolean {
+  const now = Date.now();
+  for (const [key, seenAt] of registry.entries()) {
+    if (now - seenAt > EVENT_SYNC_DEDUP_WINDOW_MS * 6) {
+      registry.delete(key);
+    }
+  }
+
+  const dedupKey = `${payload.event}:${payload.sourceId ?? "-"}:${payload.timestamp ?? "-"}`;
+  const seenAt = registry.get(dedupKey);
+  if (seenAt && now - seenAt < EVENT_SYNC_DEDUP_WINDOW_MS) {
+    return false;
+  }
+  registry.set(dedupKey, now);
+  return true;
+}
+
+function syncQueryCacheFromCoreEvent(
+  queryClient: ReturnType<typeof useQueryClient>,
+  payload: CoreEventPayload,
+): void {
+  const timestamp = payload.timestamp ?? new Date().toISOString();
+  const sourceId = payload.sourceId;
+
+  switch (payload.event) {
+    case "source:created":
+    case "source:updated":
+    case "source:deleted":
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.sources });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      return;
+    case "refresh:complete":
+      if (sourceId) {
+        queryClient.setQueryData<SourceListResponse | undefined>(
+          queryKeys.sources.all,
+          (current) =>
+            patchSourceItem(current, sourceId, {
+              status: "healthy",
+              updatedAt: timestamp,
+            }),
+        );
+      }
+      queryClient.setQueryData<SystemStatusResponse | undefined>(
+        queryKeys.dashboard.systemStatus,
+        (current) =>
+          patchSystemStatus(current, {
+            lastRefreshAt: timestamp,
+          }),
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.logsRoot });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.logsRoot });
+      return;
+    case "refresh:failed":
+    case "refresh:error":
+      if (sourceId) {
+        queryClient.setQueryData<SourceListResponse | undefined>(
+          queryKeys.sources.all,
+          (current) =>
+            patchSourceItem(current, sourceId, {
+              status: "degraded",
+              updatedAt: timestamp,
+            }),
+        );
+      }
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.logsRoot });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.logsRoot });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      return;
+    case "profile:created":
+    case "profile:updated":
+    case "profile:deleted":
+    case "profile:token-rotated":
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      return;
+    case "profile:refreshed":
+      queryClient.setQueryData<SystemStatusResponse | undefined>(
+        queryKeys.dashboard.systemStatus,
+        (current) =>
+          patchSystemStatus(current, {
+            lastRefreshAt: timestamp,
+          }),
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.logsRoot });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.logsRoot });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      return;
+    case "plugin:imported":
+    case "plugin:toggled":
+    case "plugin:removed":
+      void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
+      return;
+    default:
+      return;
+  }
 }

@@ -110,7 +110,9 @@ export default function ProfilesPage() {
       });
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      if (!eventStreamActive) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      }
     },
   });
 
@@ -162,7 +164,9 @@ export default function ProfilesPage() {
       });
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      if (!eventStreamActive) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      }
       setActiveProfileId(null);
     },
   });
@@ -192,7 +196,9 @@ export default function ProfilesPage() {
       });
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      if (!eventStreamActive) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      }
       setActiveProfileId(null);
     },
   });
@@ -230,7 +236,9 @@ export default function ProfilesPage() {
       });
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      if (!eventStreamActive) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.profiles.all });
+      }
       setActiveProfileId(null);
     },
   });

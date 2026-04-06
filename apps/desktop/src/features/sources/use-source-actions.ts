@@ -14,12 +14,14 @@ import type { SourceListResponse, SystemStatusResponse } from "../../types/core"
 type UseSourceActionsOptions = {
   queryClient: QueryClient;
   addToast: (toast: Omit<ToastMessage, "id">) => string;
+  eventDrivenSyncEnabled: boolean;
   onCreateSuccess: () => void;
 };
 
 export function useSourceActions({
   queryClient,
   addToast,
+  eventDrivenSyncEnabled,
   onCreateSuccess,
 }: UseSourceActionsOptions) {
   const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
@@ -94,6 +96,9 @@ export function useSourceActions({
       });
     },
     onSettled: () => {
+      if (eventDrivenSyncEnabled) {
+        return;
+      }
       void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
     },
@@ -141,8 +146,10 @@ export function useSourceActions({
       });
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      if (!eventDrivenSyncEnabled) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      }
       setActiveSourceId(null);
     },
   });
@@ -190,10 +197,12 @@ export function useSourceActions({
       });
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.logsRoot });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.logsRoot });
+      if (!eventDrivenSyncEnabled) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.logsRoot });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.logsRoot });
+      }
       setActiveSourceId(null);
     },
   });
@@ -256,9 +265,11 @@ export function useSourceActions({
       });
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.sources });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      if (!eventDrivenSyncEnabled) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sources.all });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.sources });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.systemStatus });
+      }
       setActiveSourceId(null);
     },
   });

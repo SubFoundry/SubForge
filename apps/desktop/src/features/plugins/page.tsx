@@ -39,7 +39,9 @@ export default function PluginsPage() {
         description: `${plugin.name} (${plugin.plugin_id})`,
         variant: "default",
       });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
+      if (!eventStreamActive) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
+      }
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "导入插件失败";
@@ -66,7 +68,9 @@ export default function PluginsPage() {
         description: `${plugin.name} (${plugin.plugin_id})`,
         variant: "default",
       });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
+      if (!eventStreamActive) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
+      }
     },
     onError: (error) => {
       addToast({
@@ -88,7 +92,9 @@ export default function PluginsPage() {
         description: `${plugin.name} (${plugin.plugin_id})`,
         variant: "warning",
       });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
+      if (!eventStreamActive) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.plugins.all });
+      }
     },
     onError: (error) => {
       addToast({

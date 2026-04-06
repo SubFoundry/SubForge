@@ -109,6 +109,7 @@ export default function SourcesPage() {
   } = useSourceActions({
     queryClient,
     addToast,
+    eventDrivenSyncEnabled: eventStreamActive,
     onCreateSuccess: beginCreate,
   });
 
