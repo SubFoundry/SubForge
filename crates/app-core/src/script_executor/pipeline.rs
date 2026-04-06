@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use app_plugin_runtime::{LoadedPlugin, LuaSandbox};
@@ -185,6 +186,8 @@ fn parse_subscription(raw: Option<&Value>) -> CoreResult<ScriptSubscription> {
     let object = raw
         .and_then(Value::as_object)
         .ok_or_else(|| script_runtime_error("fetch.subscription 必须是对象"))?;
+    let headers = parse_subscription_headers(object.get("headers"))?;
+    let user_agent = parse_subscription_user_agent(object.get("user_agent"))?;
     let url = object
         .get("url")
         .and_then(Value::as_str)
@@ -197,8 +200,19 @@ fn parse_subscription(raw: Option<&Value>) -> CoreResult<ScriptSubscription> {
         .filter(|value| !value.is_empty());
 
     match (url, content) {
-        (Some(url), None) => Ok(ScriptSubscription::Url(url.to_string())),
-        (None, Some(content)) => Ok(ScriptSubscription::Content(content.to_string())),
+        (Some(url), None) => Ok(ScriptSubscription::Url {
+            url: url.to_string(),
+            headers,
+            user_agent,
+        }),
+        (None, Some(content)) => {
+            if !headers.is_empty() || user_agent.is_some() {
+                return Err(script_runtime_error(
+                    "fetch.subscription 为 content 模式时不允许设置 headers/user_agent",
+                ));
+            }
+            Ok(ScriptSubscription::Content(content.to_string()))
+        }
         (Some(_), Some(_)) => Err(script_runtime_error(
             "fetch.subscription 不能同时包含 url 和 content",
         )),
@@ -206,4 +220,52 @@ fn parse_subscription(raw: Option<&Value>) -> CoreResult<ScriptSubscription> {
             "fetch.subscription 必须提供非空 url 或 content",
         )),
     }
+}
+
+fn parse_subscription_headers(raw: Option<&Value>) -> CoreResult<BTreeMap<String, String>> {
+    let Some(raw) = raw else {
+        return Ok(BTreeMap::new());
+    };
+    let map = raw
+        .as_object()
+        .ok_or_else(|| script_runtime_error("fetch.subscription.headers 必须是对象"))?;
+    let mut headers = BTreeMap::new();
+    for (name, value) in map {
+        let header_name = name.trim();
+        if header_name.is_empty() {
+            return Err(script_runtime_error(
+                "fetch.subscription.headers 键名不能为空",
+            ));
+        }
+        let header_value = value.as_str().ok_or_else(|| {
+            script_runtime_error(&format!(
+                "fetch.subscription.headers.{header_name} 必须是字符串"
+            ))
+        })?;
+        let header_value = header_value.trim();
+        if header_value.is_empty() {
+            return Err(script_runtime_error(&format!(
+                "fetch.subscription.headers.{header_name} 不能为空"
+            )));
+        }
+        headers.insert(header_name.to_string(), header_value.to_string());
+    }
+    Ok(headers)
+}
+
+fn parse_subscription_user_agent(raw: Option<&Value>) -> CoreResult<Option<String>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let user_agent = raw
+        .as_str()
+        .ok_or_else(|| script_runtime_error("fetch.subscription.user_agent 必须是字符串"))?
+        .trim()
+        .to_string();
+    if user_agent.is_empty() {
+        return Err(script_runtime_error(
+            "fetch.subscription.user_agent 不能为空",
+        ));
+    }
+    Ok(Some(user_agent))
 }

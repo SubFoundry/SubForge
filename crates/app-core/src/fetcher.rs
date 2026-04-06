@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use app_common::ProxyNode;
 use app_storage::{Database, NodeCacheRepository};
 use app_transport::{NetworkProfileFactory, TransportProfile};
@@ -85,6 +87,22 @@ where
         subscription_url: &str,
         user_agent: Option<&str>,
     ) -> CoreResult<FetchAndCacheResult> {
+        self.fetch_and_cache_with_metadata_and_headers(
+            source_instance_id,
+            subscription_url,
+            user_agent,
+            None,
+        )
+        .await
+    }
+
+    pub async fn fetch_and_cache_with_metadata_and_headers(
+        &self,
+        source_instance_id: &str,
+        subscription_url: &str,
+        user_agent: Option<&str>,
+        extra_headers: Option<&BTreeMap<String, String>>,
+    ) -> CoreResult<FetchAndCacheResult> {
         let subscription_url = subscription_url.trim();
         if subscription_url.is_empty() {
             return Err(CoreError::ConfigInvalid("订阅 URL 不能为空".to_string()));
@@ -92,7 +110,7 @@ where
 
         let url = Url::parse(subscription_url)
             .map_err(|error| CoreError::ConfigInvalid(format!("订阅 URL 非法：{error}")))?;
-        let headers = self.build_request_headers(user_agent)?;
+        let headers = self.build_request_headers(user_agent, extra_headers)?;
         let redacted_url = redact_url_for_log(&url);
         let redacted_headers = redact_headers_for_log(&headers);
         let started = std::time::Instant::now();
@@ -237,7 +255,11 @@ where
         Ok(())
     }
 
-    fn build_request_headers(&self, user_agent: Option<&str>) -> CoreResult<HeaderMap> {
+    fn build_request_headers(
+        &self,
+        user_agent: Option<&str>,
+        extra_headers: Option<&BTreeMap<String, String>>,
+    ) -> CoreResult<HeaderMap> {
         let mut headers = HeaderMap::new();
         for (name, value) in self.transport_profile.default_headers() {
             let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
@@ -247,6 +269,18 @@ where
                 CoreError::ConfigInvalid(format!("传输层默认 Header 值非法（{name}）：{error}"))
             })?;
             headers.insert(header_name, header_value);
+        }
+
+        if let Some(extra_headers) = extra_headers {
+            for (name, value) in extra_headers {
+                let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
+                    CoreError::ConfigInvalid(format!("请求 Header 名非法（{name}）：{error}"))
+                })?;
+                let header_value = HeaderValue::from_str(value).map_err(|error| {
+                    CoreError::ConfigInvalid(format!("请求 Header 值非法（{name}）：{error}"))
+                })?;
+                headers.insert(header_name, header_value);
+            }
         }
 
         if let Some(user_agent) = user_agent {

@@ -159,6 +159,26 @@ pub(super) fn create_script_plugin_dir(
     refresh_script: Option<&str>,
     fetch_script: &str,
 ) -> PathBuf {
+    create_script_plugin_dir_with_network_profile(
+        base,
+        dir_name,
+        plugin_id,
+        login_script,
+        refresh_script,
+        fetch_script,
+        "standard",
+    )
+}
+
+pub(super) fn create_script_plugin_dir_with_network_profile(
+    base: &Path,
+    dir_name: &str,
+    plugin_id: &str,
+    login_script: Option<&str>,
+    refresh_script: Option<&str>,
+    fetch_script: &str,
+    network_profile: &str,
+) -> PathBuf {
     let path = base.join(dir_name);
     let scripts_dir = path.join("scripts");
     fs::create_dir_all(&scripts_dir).expect("创建脚本插件目录失败");
@@ -196,7 +216,7 @@ pub(super) fn create_script_plugin_dir(
                 "fetch": "scripts/fetch.lua"
             }},
             "capabilities": ["http", "cookie", "json", "html", "base64", "secret", "log", "time"],
-            "network_profile": "standard"
+            "network_profile": "{network_profile}"
         }}"#
     );
     fs::write(path.join("plugin.json"), plugin_json).expect("写入脚本插件 plugin.json 失败");

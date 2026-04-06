@@ -328,6 +328,203 @@ async fn engine_refresh_source_executes_script_pipeline_and_persists_state() {
 }
 
 #[tokio::test]
+async fn engine_refresh_source_uses_standard_headers_for_script_subscription_url() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let temp_root = create_temp_dir("engine-script-subscription-url-headers");
+    let plugins_dir = temp_root.join("plugins");
+    let install_service = PluginInstallService::new(&db, &plugins_dir);
+
+    let chrome_requests = Arc::new(AtomicUsize::new(0));
+    let app = Router::new().route(
+        "/sub",
+        get({
+            let chrome_requests = Arc::clone(&chrome_requests);
+            move |headers: AxumHeaderMap| {
+                let chrome_requests = Arc::clone(&chrome_requests);
+                async move {
+                    let is_browser_header = headers
+                        .get("sec-ch-ua")
+                        .and_then(|value| value.to_str().ok())
+                        .map(|value| value.contains("Chromium"))
+                        .unwrap_or(false);
+                    if is_browser_header {
+                        chrome_requests.fetch_add(1, Ordering::SeqCst);
+                        (
+                            StatusCode::OK,
+                            [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                            "<html><body>blocked</body></html>".to_string(),
+                        )
+                    } else {
+                        (
+                            StatusCode::OK,
+                            [(
+                                axum::http::header::CONTENT_TYPE,
+                                "text/plain; charset=utf-8",
+                            )],
+                            "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@example.com:443#script-url"
+                                .to_string(),
+                        )
+                    }
+                }
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("启动测试 HTTP 服务失败");
+    let address = listener.local_addr().expect("读取监听地址失败");
+    let base_url = format!("http://{address}");
+    let server_task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("测试 HTTP 服务运行失败");
+    });
+    let fetch_script = format!(
+        r#"
+            function fetch(ctx, config, state)
+                return {{
+                    ok = true,
+                    subscription = {{ url = "{base_url}/sub" }}
+                }}
+            end
+        "#
+    );
+    let script_plugin_dir = create_script_plugin_dir_with_network_profile(
+        &temp_root,
+        "script-url-header-plugin",
+        "vendor.example.script-url-header",
+        None,
+        None,
+        &fetch_script,
+        "browser_chrome",
+    );
+    install_service
+        .install_from_dir(&script_plugin_dir)
+        .expect("安装脚本插件应成功");
+
+    let secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
+    let source_service = SourceService::new(&db, &plugins_dir, secret_store.as_ref());
+    let mut config = BTreeMap::new();
+    config.insert("seed".to_string(), json!("ignored"));
+    let source = source_service
+        .create_source(
+            "vendor.example.script-url-header",
+            "Script URL Header Source",
+            config,
+        )
+        .expect("创建脚本来源应成功");
+
+    let engine = Engine::new(&db, &plugins_dir, Arc::clone(&secret_store));
+    let result = engine
+        .refresh_source(&source.source.id, "manual")
+        .await
+        .expect("脚本订阅 URL 刷新应成功");
+    assert_eq!(result.node_count, 1);
+    assert_eq!(chrome_requests.load(Ordering::SeqCst), 0);
+
+    server_task.abort();
+    cleanup_dir(&temp_root);
+}
+
+#[tokio::test]
+async fn engine_refresh_source_allows_script_subscription_custom_headers() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let temp_root = create_temp_dir("engine-script-subscription-custom-headers");
+    let plugins_dir = temp_root.join("plugins");
+    let install_service = PluginInstallService::new(&db, &plugins_dir);
+
+    let app = Router::new().route(
+        "/sub",
+        get(move |headers: AxumHeaderMap| async move {
+            let has_token = headers
+                .get("x-sub-token")
+                .and_then(|value| value.to_str().ok())
+                .map(|value| value == "abc-token")
+                .unwrap_or(false);
+            if has_token {
+                (
+                    StatusCode::OK,
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8",
+                    )],
+                    "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@example.com:443#custom-header".to_string(),
+                )
+            } else {
+                (
+                    StatusCode::FORBIDDEN,
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8",
+                    )],
+                    "missing x-sub-token".to_string(),
+                )
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("启动测试 HTTP 服务失败");
+    let address = listener.local_addr().expect("读取监听地址失败");
+    let base_url = format!("http://{address}");
+    let server_task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("测试 HTTP 服务运行失败");
+    });
+    let fetch_script = format!(
+        r#"
+            function fetch(ctx, config, state)
+                return {{
+                    ok = true,
+                    subscription = {{
+                        url = "{base_url}/sub",
+                        headers = {{
+                            ["x-sub-token"] = "abc-token",
+                            ["accept"] = "text/plain"
+                        }}
+                    }}
+                }}
+            end
+        "#
+    );
+    let script_plugin_dir = create_script_plugin_dir_with_network_profile(
+        &temp_root,
+        "script-custom-headers-plugin",
+        "vendor.example.script-custom-headers",
+        None,
+        None,
+        &fetch_script,
+        "browser_chrome",
+    );
+    install_service
+        .install_from_dir(&script_plugin_dir)
+        .expect("安装脚本插件应成功");
+
+    let secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
+    let source_service = SourceService::new(&db, &plugins_dir, secret_store.as_ref());
+    let mut config = BTreeMap::new();
+    config.insert("seed".to_string(), json!("ignored"));
+    let source = source_service
+        .create_source(
+            "vendor.example.script-custom-headers",
+            "Script Custom Header Source",
+            config,
+        )
+        .expect("创建脚本来源应成功");
+
+    let engine = Engine::new(&db, &plugins_dir, Arc::clone(&secret_store));
+    let result = engine
+        .refresh_source(&source.source.id, "manual")
+        .await
+        .expect("脚本订阅 URL + 自定义 headers 刷新应成功");
+    assert_eq!(result.node_count, 1);
+
+    server_task.abort();
+    cleanup_dir(&temp_root);
+}
+
+#[tokio::test]
 async fn engine_refresh_source_stops_when_script_login_fails() {
     let db = Database::open_in_memory().expect("内存数据库初始化失败");
     let temp_root = create_temp_dir("engine-script-login-failed");

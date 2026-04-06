@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use app_common::{PluginType, ProxyNode};
@@ -40,7 +41,11 @@ pub(super) struct StageResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ScriptSubscription {
-    Url(String),
+    Url {
+        url: String,
+        headers: BTreeMap<String, String>,
+        user_agent: Option<String>,
+    },
     Content(String),
 }
 
@@ -95,10 +100,11 @@ impl<'a> ScriptExecutor<'a> {
 
             let mut source_row = source.source.clone();
             let mut state = parse_persisted_state(source.source.state_json.as_deref())?;
-            let fetcher = StaticFetcher::new_with_network_profile(
+            let script_fetcher = StaticFetcher::new_with_network_profile(
                 self.db,
                 &loaded_plugin.manifest.network_profile,
             )?;
+            let subscription_fetcher = StaticFetcher::new(self.db)?;
 
             if state.is_none()
                 && let Some(login_entry) = loaded_plugin.manifest.entrypoints.login.as_deref()
@@ -154,16 +160,27 @@ impl<'a> ScriptExecutor<'a> {
             apply_state_update(&mut state, fetch_result.state_update.clone());
             persist_state_if_changed(self.db, &mut source_row, &state, &fetch_result.state_update)?;
 
-            let user_agent = source.config.get("user_agent").and_then(Value::as_str);
             let (nodes, subscription_userinfo) = match fetch_result.subscription {
-                ScriptSubscription::Url(url) => {
-                    let result = fetcher
-                        .fetch_and_cache_with_metadata(&source.source.id, &url, user_agent)
+                ScriptSubscription::Url {
+                    url,
+                    headers,
+                    user_agent,
+                } => {
+                    let source_user_agent = source.config.get("user_agent").and_then(Value::as_str);
+                    let effective_user_agent = user_agent.as_deref().or(source_user_agent);
+                    let result = subscription_fetcher
+                        .fetch_and_cache_with_metadata_and_headers(
+                            &source.source.id,
+                            &url,
+                            effective_user_agent,
+                            Some(&headers),
+                        )
                         .await?;
                     (result.nodes, result.subscription_userinfo)
                 }
                 ScriptSubscription::Content(content) => {
-                    let nodes = fetcher.parse_and_cache_content(&source.source.id, &content)?;
+                    let nodes =
+                        script_fetcher.parse_and_cache_content(&source.source.id, &content)?;
                     (nodes, None)
                 }
             };
