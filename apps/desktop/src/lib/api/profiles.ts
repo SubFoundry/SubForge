@@ -13,11 +13,13 @@ export async function createProfile(input: {
   name: string;
   description?: string;
   sourceIds: string[];
+  routingTemplateSourceId?: string | null;
 }): Promise<ProfileResponse> {
   return requestJson<ProfileResponse>("POST", "/api/profiles", {
     name: input.name,
     description: input.description,
     source_ids: input.sourceIds,
+    routing_template_source_id: input.routingTemplateSourceId ?? undefined,
   });
 }
 
@@ -27,6 +29,7 @@ export async function updateProfile(
     name?: string;
     description?: string | null;
     sourceIds?: string[];
+    routingTemplateSourceId?: string | null;
   },
 ): Promise<ProfileResponse> {
   return requestJson<ProfileResponse>(
@@ -36,6 +39,10 @@ export async function updateProfile(
       name: input.name,
       description: input.description,
       source_ids: input.sourceIds,
+      routing_template_source_id:
+        input.routingTemplateSourceId !== undefined
+          ? input.routingTemplateSourceId
+          : undefined,
     },
   );
 }

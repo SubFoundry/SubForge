@@ -108,8 +108,7 @@ where
                     let trimmed = line.trim();
                     if !trimmed.is_empty() && forwarding_enabled {
                         // GUI 场景下 stdout/stderr 句柄可能不可用；写失败时降级为仅保留管道读取，避免线程 panic 导致子进程管道被提前关闭。
-                        forwarding_enabled =
-                            try_forward_log_line(stream_name, trimmed).is_ok();
+                        forwarding_enabled = try_forward_log_line(stream_name, trimmed).is_ok();
                     }
                 }
                 Err(_) => break,

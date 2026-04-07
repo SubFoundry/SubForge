@@ -102,6 +102,7 @@ export function patchProfileItem(
     name?: string;
     description?: string | null;
     sourceIds?: string[];
+    routingTemplateSourceId?: string | null;
     exportToken?: string | null;
     updatedAt?: string;
   },
@@ -122,6 +123,10 @@ export function patchProfileItem(
           name: patch.name ?? entry.profile.name,
           description:
             patch.description !== undefined ? patch.description : entry.profile.description,
+          routing_template_source_id:
+            patch.routingTemplateSourceId !== undefined
+              ? patch.routingTemplateSourceId
+              : entry.profile.routing_template_source_id,
           updated_at: patch.updatedAt ?? entry.profile.updated_at,
         },
         source_ids: patch.sourceIds ?? entry.source_ids,
@@ -145,4 +150,3 @@ export function patchSystemStatus(
     lastRefreshAt: patch.lastRefreshAt ?? cache.lastRefreshAt,
   };
 }
-

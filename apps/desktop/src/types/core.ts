@@ -128,6 +128,7 @@ export type ProfileRecord = {
   id: string;
   name: string;
   description?: string | null;
+  routing_template_source_id?: string | null;
   created_at: string;
   updated_at: string;
 };

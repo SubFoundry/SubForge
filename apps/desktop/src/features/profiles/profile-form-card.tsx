@@ -9,11 +9,13 @@ type ProfileFormCardProps = {
   selectedSourceIds: string[];
   sourceLoading: boolean;
   sources: SourceListResponse["sources"];
+  routingTemplateSourceId: string | null;
   submitDisabled: boolean;
   submitting: boolean;
   onNameChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
   onToggleSourceSelection: (sourceId: string, checked: boolean) => void;
+  onRoutingTemplateSourceChange: (sourceId: string | null) => void;
   onSubmit: () => void;
   onCancelEdit: () => void;
 };
@@ -25,11 +27,13 @@ export function ProfileFormCard({
   selectedSourceIds,
   sourceLoading,
   sources,
+  routingTemplateSourceId,
   submitDisabled,
   submitting,
   onNameChange,
   onDescriptionChange,
   onToggleSourceSelection,
+  onRoutingTemplateSourceChange,
   onSubmit,
   onCancelEdit,
 }: ProfileFormCardProps) {
@@ -95,6 +99,29 @@ export function ProfileFormCard({
             </div>
           )}
         </div>
+
+        <label className="text-xs text-[var(--muted-text)]">
+          <span className="text-[var(--app-text)]">分流模板来源（可选）</span>
+          <select
+            className="ui-input ui-focus mt-1"
+            value={routingTemplateSourceId ?? ""}
+            onChange={(event) =>
+              onRoutingTemplateSourceChange(event.currentTarget.value || null)
+            }
+          >
+            <option value="">不使用模板（默认分组）</option>
+            {sources
+              .filter((item) => selectedSourceIds.includes(item.source.id))
+              .map((item) => (
+                <option key={item.source.id} value={item.source.id}>
+                  {item.source.name}
+                </option>
+              ))}
+          </select>
+          <p className="mt-1 text-[11px] text-[var(--muted-text)]">
+            用于 Clash / sing-box 模板导出：沿用该来源的分组结构，并注入当前 Profile 的最终节点集。
+          </p>
+        </label>
 
         <div className="flex flex-wrap items-center gap-2">
           <button

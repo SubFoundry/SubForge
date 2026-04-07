@@ -76,6 +76,13 @@ export function ProfileListCard({
                               .map((sourceId) => sourceNameMap.get(sourceId) ?? sourceId)
                               .join(" / ")}
                       </p>
+                      <p className="mt-1 text-xs text-[var(--muted-text)]">
+                        分流模板：
+                        {profile.routing_template_source_id
+                          ? sourceNameMap.get(profile.routing_template_source_id) ??
+                            profile.routing_template_source_id
+                          : "默认分组"}
+                      </p>
                     </div>
                     <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
                       <button
