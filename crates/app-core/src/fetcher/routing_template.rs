@@ -1,26 +1,60 @@
 use app_common::{
-    ClashRoutingTemplate, RoutingTemplateGroupIr, RoutingTemplateIr, RoutingTemplateSourceKernel,
+    ClashRoutingTemplate, ProxyNode, RoutingTemplateGroupIr, RoutingTemplateIr,
+    RoutingTemplateSourceKernel,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_yaml::Value as YamlValue;
 
+#[path = "routing_template_clash.rs"]
+mod clash_payload;
+#[path = "routing_template_singbox.rs"]
+mod singbox_payload;
 #[path = "routing_template_utils.rs"]
 mod utils;
+use crate::CoreResult;
+use clash_payload::parse_clash_payload;
+use singbox_payload::parse_singbox_payload;
 use utils::{
     parse_interval_seconds, parse_port_rule, push_prefixed_rules, push_unique_rule, yaml_map_get,
     yaml_map_get_any,
 };
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ParsedRoutingPayload {
+    pub(super) nodes: Vec<ProxyNode>,
+    pub(super) routing_template: Option<ClashRoutingTemplate>,
+}
+
 pub(super) fn source_routing_template_key(source_instance_id: &str) -> String {
     format!("source.{source_instance_id}.clash_routing_template")
 }
 
-pub(super) fn extract_clash_routing_template(payload: &str) -> Option<ClashRoutingTemplate> {
-    parse_routing_template_ir(payload).map(RoutingTemplateIr::into_clash_template)
-}
+pub(super) fn parse_routing_payload(
+    source_instance_id: &str,
+    payload: &str,
+) -> CoreResult<Option<ParsedRoutingPayload>> {
+    if let Some(parsed) = parse_clash_payload(source_instance_id, payload)? {
+        let mut routing_template =
+            parse_clash_routing_template_ir(payload).map(RoutingTemplateIr::into_clash_template);
+        if let Some(template) = routing_template.as_mut() {
+            template.base_config_yaml = parsed.base_config_yaml;
+        }
+        return Ok(Some(ParsedRoutingPayload {
+            nodes: parsed.nodes,
+            routing_template,
+        }));
+    }
 
-fn parse_routing_template_ir(payload: &str) -> Option<RoutingTemplateIr> {
-    parse_clash_routing_template_ir(payload).or_else(|| parse_singbox_routing_template_ir(payload))
+    if let Some(parsed) = parse_singbox_payload(source_instance_id, payload)? {
+        let routing_template =
+            parse_singbox_routing_template_ir(payload).map(RoutingTemplateIr::into_clash_template);
+        return Ok(Some(ParsedRoutingPayload {
+            nodes: parsed.nodes,
+            routing_template,
+        }));
+    }
+
+    Ok(None)
 }
 
 fn parse_clash_routing_template_ir(payload: &str) -> Option<RoutingTemplateIr> {

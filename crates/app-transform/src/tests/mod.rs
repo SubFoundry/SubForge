@@ -362,7 +362,7 @@ fn snapshot_tuic_share_link_base64() {
 }
 
 #[test]
-fn clash_template_keeps_group_chain_and_replaces_nodes_with_aggregated_set() {
+fn clash_template_preserves_existing_nodes_and_appends_aggregated_set() {
     let transformer = ClashTransformer::default();
     let nodes = vec![
         build_node(
@@ -385,6 +385,7 @@ fn clash_template_keeps_group_chain_and_replaces_nodes_with_aggregated_set() {
     ];
 
     let template = ClashRoutingTemplate {
+        base_config_yaml: None,
         groups: vec![
             ClashRoutingTemplateGroup {
                 name: "Proxy".to_string(),
@@ -416,6 +417,7 @@ fn clash_template_keeps_group_chain_and_replaces_nodes_with_aggregated_set() {
             },
         ],
         rules: Vec::new(),
+        preserve_original_proxy_names: true,
     };
 
     let yaml = transformer
@@ -442,6 +444,7 @@ fn clash_template_keeps_group_chain_and_replaces_nodes_with_aggregated_set() {
         .collect::<Vec<_>>();
     assert!(proxy_group_proxies.contains(&"Auto"));
     assert!(proxy_group_proxies.contains(&"DIRECT"));
+    assert!(proxy_group_proxies.contains(&"旧节点"));
     assert!(proxy_group_proxies.contains(&"HK-Aggregated"));
     assert!(proxy_group_proxies.contains(&"SG-Aggregated"));
 
@@ -458,6 +461,8 @@ fn clash_template_keeps_group_chain_and_replaces_nodes_with_aggregated_set() {
         .collect::<Vec<_>>();
     assert!(auto_group_proxies.contains(&"HK-Aggregated"));
     assert!(auto_group_proxies.contains(&"SG-Aggregated"));
+    assert!(auto_group_proxies.contains(&"旧节点1"));
+    assert!(auto_group_proxies.contains(&"旧节点2"));
 }
 
 #[test]
@@ -475,6 +480,7 @@ fn clash_template_keeps_pure_subgroup_reference_without_injecting_nodes() {
     )];
 
     let template = ClashRoutingTemplate {
+        base_config_yaml: None,
         groups: vec![
             ClashRoutingTemplateGroup {
                 name: "Proxy".to_string(),
@@ -502,6 +508,7 @@ fn clash_template_keeps_pure_subgroup_reference_without_injecting_nodes() {
             },
         ],
         rules: Vec::new(),
+        preserve_original_proxy_names: true,
     };
 
     let yaml = transformer
@@ -550,6 +557,7 @@ fn clash_template_supports_provider_style_groups_with_filter() {
     ];
 
     let template = ClashRoutingTemplate {
+        base_config_yaml: None,
         groups: vec![
             ClashRoutingTemplateGroup {
                 name: "Proxy".to_string(),
@@ -577,6 +585,7 @@ fn clash_template_supports_provider_style_groups_with_filter() {
             },
         ],
         rules: vec!["MATCH,Proxy".to_string()],
+        preserve_original_proxy_names: true,
     };
 
     let yaml = transformer
@@ -605,6 +614,113 @@ fn clash_template_supports_provider_style_groups_with_filter() {
         .expect("模板模式应包含 rules");
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].as_str(), Some("MATCH,Proxy"));
+}
+
+#[test]
+fn singbox_template_preserves_existing_nodes_and_appends_aggregated_set() {
+    let transformer = SingboxTransformer::default();
+    let nodes = vec![
+        build_node(
+            "HK-Aggregated",
+            ProxyProtocol::Ss,
+            ProxyTransport::Tcp,
+            Some("hk"),
+            vec![
+                ("cipher", Value::String("aes-128-gcm".to_string())),
+                ("password", Value::String("p@ss".to_string())),
+            ],
+        ),
+        build_node(
+            "SG-Aggregated",
+            ProxyProtocol::Trojan,
+            ProxyTransport::Tcp,
+            Some("sg"),
+            vec![("password", Value::String("trojan-pass".to_string()))],
+        ),
+    ];
+
+    let template = ClashRoutingTemplate {
+        base_config_yaml: None,
+        groups: vec![
+            ClashRoutingTemplateGroup {
+                name: "Proxy".to_string(),
+                group_type: "select".to_string(),
+                proxies: vec![
+                    "Auto".to_string(),
+                    "DIRECT".to_string(),
+                    "旧节点".to_string(),
+                ],
+                url: None,
+                interval: None,
+                tolerance: None,
+                include_all: false,
+                use_provider: false,
+                filter: None,
+                exclude_filter: None,
+            },
+            ClashRoutingTemplateGroup {
+                name: "Auto".to_string(),
+                group_type: "url-test".to_string(),
+                proxies: vec!["旧节点".to_string()],
+                url: Some("http://www.gstatic.com/generate_204".to_string()),
+                interval: Some(300),
+                tolerance: Some(50),
+                include_all: false,
+                use_provider: false,
+                filter: None,
+                exclude_filter: None,
+            },
+        ],
+        rules: Vec::new(),
+        preserve_original_proxy_names: true,
+    };
+
+    let json = transformer
+        .transform_with_template(&nodes, Some(&template))
+        .expect("带模板转换 sing-box 失败");
+    let value: Value = serde_json::from_str(&json).expect("sing-box JSON 解析失败");
+    let outbounds = value
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .expect("应包含 outbounds");
+
+    let proxy_group = outbounds
+        .iter()
+        .find(|outbound| outbound.get("tag").and_then(Value::as_str) == Some("Proxy"))
+        .expect("应包含 Proxy selector");
+    let proxy_targets = proxy_group
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .expect("Proxy selector 缺少 outbounds")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(proxy_targets.contains(&"Auto"));
+    assert!(proxy_targets.contains(&"direct"));
+    assert!(proxy_targets.contains(&"旧节点"));
+    assert!(proxy_targets.contains(&"HK-Aggregated"));
+    assert!(proxy_targets.contains(&"SG-Aggregated"));
+
+    let auto_group = outbounds
+        .iter()
+        .find(|outbound| outbound.get("tag").and_then(Value::as_str) == Some("Auto"))
+        .expect("应包含 Auto urltest");
+    let auto_targets = auto_group
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .expect("Auto urltest 缺少 outbounds")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(auto_targets.contains(&"旧节点"));
+    assert!(auto_targets.contains(&"HK-Aggregated"));
+    assert!(auto_targets.contains(&"SG-Aggregated"));
+
+    assert!(
+        outbounds
+            .iter()
+            .any(|outbound| outbound.get("tag").and_then(Value::as_str) == Some("direct"))
+    );
 }
 
 #[test]

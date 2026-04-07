@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use app_common::{ClashRoutingTemplate, Profile, ProxyNode};
-use regex::Regex;
 use serde::Serialize;
+use serde_yaml::{Mapping as YamlMapping, Value as YamlValue};
 
 use crate::shared::push_unique_proxy_name;
 use crate::{TransformResult, Transformer};
 
+mod group_utils;
 mod proxy;
+use group_utils::{collect_region_groups, filter_group_candidate_nodes, is_builtin_policy};
 
 /// Clash/Mihomo YAML 转换器。
 #[derive(Debug, Clone)]
@@ -59,6 +61,13 @@ impl ClashTransformer {
         } else {
             None
         };
+
+        if let Some(template) = routing_template
+            && let Some(base_config_yaml) = template.base_config_yaml.as_deref()
+            && !base_config_yaml.trim().is_empty()
+        {
+            return self.serialize_with_base_config(base_config_yaml, proxies, proxy_groups, rules);
+        }
 
         let config = ClashConfig {
             proxies,
@@ -133,47 +142,49 @@ impl ClashTransformer {
             .collect::<BTreeSet<_>>();
 
         let mut groups = Vec::with_capacity(routing_template.groups.len());
-        let mut injected_any_nodes = false;
         for template_group in &routing_template.groups {
-            let mut proxies = Vec::new();
-            let mut inserted_aggregated_nodes = false;
-            let mut has_plain_node_slot = false;
             let candidate_nodes = filter_group_candidate_nodes(
                 &aggregated_node_names,
                 template_group.filter.as_deref(),
                 template_group.exclude_filter.as_deref(),
             );
+            let has_plain_node_slot = template_group
+                .proxies
+                .iter()
+                .any(|item| !group_name_set.contains(item.as_str()) && !is_builtin_policy(item));
+            let should_append_nodes = has_plain_node_slot
+                || (template_group.proxies.is_empty()
+                    && (template_group.include_all || template_group.use_provider));
 
-            for item in &template_group.proxies {
-                if group_name_set.contains(item.as_str()) || is_builtin_policy(item) {
+            let mut proxies = Vec::new();
+            if routing_template.preserve_original_proxy_names {
+                for item in &template_group.proxies {
                     push_unique_proxy_name(&mut proxies, item);
-                    continue;
                 }
-                has_plain_node_slot = true;
-                if !inserted_aggregated_nodes {
+                if should_append_nodes {
                     for name in &candidate_nodes {
                         push_unique_proxy_name(&mut proxies, name);
                     }
-                    inserted_aggregated_nodes = true;
                 }
-            }
-
-            let should_inject_without_slot =
-                template_group.include_all || template_group.use_provider;
-            if !inserted_aggregated_nodes
-                && !candidate_nodes.is_empty()
-                && (has_plain_node_slot
-                    || template_group.proxies.is_empty()
-                    || should_inject_without_slot)
-            {
-                for name in &candidate_nodes {
-                    push_unique_proxy_name(&mut proxies, name);
+            } else {
+                let mut inserted_aggregated_nodes = false;
+                for item in &template_group.proxies {
+                    if group_name_set.contains(item.as_str()) || is_builtin_policy(item) {
+                        push_unique_proxy_name(&mut proxies, item);
+                        continue;
+                    }
+                    if !inserted_aggregated_nodes {
+                        for name in &candidate_nodes {
+                            push_unique_proxy_name(&mut proxies, name);
+                        }
+                        inserted_aggregated_nodes = true;
+                    }
                 }
-                inserted_aggregated_nodes = true;
-            }
-
-            if inserted_aggregated_nodes {
-                injected_any_nodes = true;
+                if !inserted_aggregated_nodes && should_append_nodes {
+                    for name in &candidate_nodes {
+                        push_unique_proxy_name(&mut proxies, name);
+                    }
+                }
             }
 
             groups.push(ClashProxyGroup {
@@ -186,79 +197,40 @@ impl ClashTransformer {
             });
         }
 
-        if !injected_any_nodes
-            && !aggregated_node_names.is_empty()
-            && let Some(first_group) = groups.first_mut()
-        {
-            for name in &aggregated_node_names {
-                push_unique_proxy_name(&mut first_group.proxies, name);
-            }
-        }
-
         if groups.is_empty() {
             (self.build_proxy_groups(nodes), false)
         } else {
             (groups, true)
         }
     }
-}
 
-fn collect_region_groups(nodes: &[ProxyNode]) -> BTreeMap<String, Vec<String>> {
-    let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
-    for node in nodes {
-        let Some(region_name) = normalize_region_name(node.region.as_deref()) else {
-            continue;
+    fn serialize_with_base_config(
+        &self,
+        base_config_yaml: &str,
+        proxies: Vec<ClashProxy>,
+        proxy_groups: Vec<ClashProxyGroup>,
+        rules: Option<Vec<String>>,
+    ) -> TransformResult<String> {
+        let mut root = match serde_yaml::from_str::<YamlValue>(base_config_yaml)? {
+            YamlValue::Mapping(mapping) => mapping,
+            _ => YamlMapping::new(),
         };
-        groups
-            .entry(region_name)
-            .or_default()
-            .insert(node.name.clone());
+        root.insert(
+            YamlValue::String("proxies".to_string()),
+            serde_yaml::to_value(proxies)?,
+        );
+        root.insert(
+            YamlValue::String("proxy-groups".to_string()),
+            serde_yaml::to_value(proxy_groups)?,
+        );
+        if let Some(rules) = rules {
+            root.insert(
+                YamlValue::String("rules".to_string()),
+                serde_yaml::to_value(rules)?,
+            );
+        }
+        Ok(serde_yaml::to_string(&YamlValue::Mapping(root))?)
     }
-
-    groups
-        .into_iter()
-        .map(|(name, values)| (name, values.into_iter().collect::<Vec<_>>()))
-        .collect()
-}
-
-fn normalize_region_name(region: Option<&str>) -> Option<String> {
-    let value = region?.trim();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_ascii_uppercase())
-    }
-}
-
-fn is_builtin_policy(name: &str) -> bool {
-    matches!(
-        name.trim().to_ascii_uppercase().as_str(),
-        "DIRECT" | "REJECT" | "REJECT-DROP" | "PASS" | "COMPATIBLE"
-    )
-}
-
-fn filter_group_candidate_nodes(
-    node_names: &[String],
-    include_filter: Option<&str>,
-    exclude_filter: Option<&str>,
-) -> Vec<String> {
-    node_names
-        .iter()
-        .filter(|name| matches_filter(name, include_filter, true))
-        .filter(|name| matches_filter(name, exclude_filter, false))
-        .cloned()
-        .collect()
-}
-
-fn matches_filter(value: &str, pattern: Option<&str>, include_mode: bool) -> bool {
-    let Some(pattern) = pattern.map(str::trim).filter(|item| !item.is_empty()) else {
-        return true;
-    };
-
-    let matched = Regex::new(pattern)
-        .map(|regex| regex.is_match(value))
-        .unwrap_or_else(|_| value.contains(pattern));
-    if include_mode { matched } else { !matched }
 }
 
 #[derive(Debug, Serialize)]

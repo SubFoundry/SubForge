@@ -176,4 +176,6 @@ fn routing_template_ir_can_convert_to_clash_template() {
     assert_eq!(template.groups.len(), 1);
     assert_eq!(template.groups[0].name, "Proxy");
     assert_eq!(template.rules, vec!["MATCH,Proxy".to_string()]);
+    assert!(template.preserve_original_proxy_names);
+    assert!(template.base_config_yaml.is_none());
 }

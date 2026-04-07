@@ -40,9 +40,13 @@ pub struct Profile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClashRoutingTemplate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_config_yaml: Option<String>,
     pub groups: Vec<ClashRoutingTemplateGroup>,
     #[serde(default)]
     pub rules: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub preserve_original_proxy_names: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,13 +70,17 @@ pub struct RoutingTemplateIr {
 
 impl RoutingTemplateIr {
     pub fn into_clash_template(self) -> ClashRoutingTemplate {
+        let preserve_original_proxy_names =
+            !matches!(self.source_kernel, RoutingTemplateSourceKernel::Unknown);
         ClashRoutingTemplate {
+            base_config_yaml: None,
             groups: self
                 .groups
                 .into_iter()
                 .map(ClashRoutingTemplateGroup::from)
                 .collect(),
             rules: self.rules,
+            preserve_original_proxy_names,
         }
     }
 }

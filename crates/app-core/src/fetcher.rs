@@ -18,7 +18,7 @@ use content_decode::decode_response_body;
 pub(crate) use request_guard::{
     redact_headers_for_log, redact_url_for_log, sanitize_reqwest_error, validate_content_type,
 };
-use routing_template::{extract_clash_routing_template, source_routing_template_key};
+use routing_template::{parse_routing_payload, source_routing_template_key};
 
 const MAX_SUBSCRIPTION_BYTES: usize = 10 * 1024 * 1024;
 const SUBSCRIPTION_USERINFO_HEADER: &str = "subscription-userinfo";
@@ -251,11 +251,14 @@ where
     }
 
     fn parse_nodes(&self, source_instance_id: &str, payload: &str) -> CoreResult<Vec<ProxyNode>> {
-        let template = extract_clash_routing_template(payload);
-        self.update_clash_routing_template(source_instance_id, template.as_ref())?;
-        if template.is_some() {
-            return Ok(Vec::new());
+        if let Some(parsed) = parse_routing_payload(source_instance_id, payload)? {
+            self.update_clash_routing_template(
+                source_instance_id,
+                parsed.routing_template.as_ref(),
+            )?;
+            return Ok(parsed.nodes);
         }
+        self.update_clash_routing_template(source_instance_id, None)?;
         self.parser.parse(source_instance_id, payload)
     }
 

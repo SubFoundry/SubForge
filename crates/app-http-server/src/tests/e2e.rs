@@ -8,18 +8,37 @@ use tower::ServiceExt;
 use super::*;
 
 const CLASH_TEMPLATE_FIXTURE: &str = r#"
+mixed-port: 7890
+mode: rule
+dns:
+  enable: true
+  ipv6: false
+proxies:
+  - name: HK-Template-1
+    type: trojan
+    server: hk-template-1.example.com
+    port: 443
+    password: template-pass
+  - name: HK-Template-2
+    type: trojan
+    server: hk-template-2.example.com
+    port: 444
+    password: template-pass
 proxy-groups:
   - name: Proxy
     type: select
     proxies:
       - Auto
-      - DIRECT
+      - HK-Template-1
+      - HK-Template-2
   - name: Auto
-    type: select
-    use:
-      - provider-a
-    include-all: true
-    filter: HK|SG
+    type: url-test
+    proxies:
+      - HK-Template-1
+      - HK-Template-2
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
 rules:
   - MATCH,Proxy
 "#;
@@ -38,6 +57,14 @@ const SINGBOX_TEMPLATE_FIXTURE: &str = r#"
       "outbounds": ["old-node-a"],
       "url": "http://www.gstatic.com/generate_204",
       "interval": 300
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "old-node-a",
+      "server": "old-node.example.com",
+      "server_port": 443,
+      "method": "aes-128-gcm",
+      "password": "p@ss"
     }
   ],
   "route": {
@@ -853,12 +880,30 @@ async fn e2e_profile_clash_template_source_applies_template_groups() {
         .await
         .expect("读取 clash 响应体失败");
     let clash_text = String::from_utf8(clash_bytes.to_vec()).expect("clash 响应不是 UTF-8");
+    assert!(clash_text.contains("mixed-port: 7890"));
+    assert!(clash_text.contains("dns:"));
     assert!(clash_text.contains("proxy-groups:"));
     assert!(clash_text.contains("\nrules:"));
     assert!(clash_text.contains("- MATCH,Proxy"));
 
     assert!(clash_text.contains("- name: Proxy"));
     assert!(clash_text.contains("- name: Auto"));
+    assert!(clash_text.contains("name: HK-Template-1"));
+    assert!(clash_text.contains("name: HK-Template-2"));
+
+    let proxy_group_start = clash_text.find("- name: Proxy").expect("缺少 Proxy 分组块");
+    let proxy_group_tail = &clash_text[proxy_group_start..];
+    let proxy_group_end = proxy_group_tail
+        .get(1..)
+        .and_then(|tail| tail.find("\n- name: ").map(|index| index + 1))
+        .unwrap_or(proxy_group_tail.len());
+    let proxy_group_block = &proxy_group_tail[..proxy_group_end];
+    assert!(proxy_group_block.contains("- Auto"));
+    assert!(proxy_group_block.contains("- HK-Template-1"));
+    assert!(proxy_group_block.contains("- HK-Template-2"));
+    assert!(proxy_group_block.contains("- HK-SS"));
+    assert!(proxy_group_block.contains("- SG-VMESS"));
+    assert!(proxy_group_block.contains("- US-Trojan"));
 
     let auto_group_start = clash_text.find("- name: Auto").expect("缺少 Auto 分组块");
     let auto_group_tail = &clash_text[auto_group_start..];
@@ -867,9 +912,122 @@ async fn e2e_profile_clash_template_source_applies_template_groups() {
         .and_then(|tail| tail.find("\n- name: ").map(|index| index + 1))
         .unwrap_or(auto_group_tail.len());
     let auto_group_block = &auto_group_tail[..auto_group_end];
+    assert!(auto_group_block.contains("- HK-Template-1"));
+    assert!(auto_group_block.contains("- HK-Template-2"));
     assert!(auto_group_block.contains("- HK-SS"));
     assert!(auto_group_block.contains("- SG-VMESS"));
-    assert!(!auto_group_block.contains("- US-Trojan"));
+    assert!(auto_group_block.contains("- US-Trojan"));
+
+    let singbox_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/profiles/{profile_id}/sing-box?token={export_token}"
+                ))
+                .header(HOST, "127.0.0.1:18118")
+                .body(Body::empty())
+                .expect("构建 sing-box 请求失败"),
+        )
+        .await
+        .expect("获取 sing-box 订阅失败");
+    assert_eq!(singbox_response.status(), StatusCode::OK);
+    let singbox_payload = read_json(singbox_response).await;
+    let outbounds = singbox_payload
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .expect("sing-box 响应缺少 outbounds");
+    let proxy_selector = outbounds
+        .iter()
+        .find(|outbound| outbound.get("tag").and_then(Value::as_str) == Some("Proxy"))
+        .expect("sing-box 响应缺少 Proxy selector");
+    let proxy_targets = proxy_selector
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .expect("Proxy selector 缺少 outbounds")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(proxy_targets.contains(&"Auto"));
+    assert!(proxy_targets.contains(&"HK-Template-1"));
+    assert!(proxy_targets.contains(&"HK-Template-2"));
+    assert!(proxy_targets.contains(&"HK-SS"));
+    assert!(proxy_targets.contains(&"SG-VMESS"));
+    assert!(proxy_targets.contains(&"US-Trojan"));
+
+    let raw_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/profiles/{profile_id}/raw?token={export_token}"
+                ))
+                .header(HOST, "127.0.0.1:18118")
+                .body(Body::empty())
+                .expect("构建 raw 请求失败"),
+        )
+        .await
+        .expect("获取 raw 订阅失败");
+    assert_eq!(raw_response.status(), StatusCode::OK);
+    let raw_payload = read_json(raw_response).await;
+    let raw_nodes = raw_payload
+        .get("nodes")
+        .and_then(Value::as_array)
+        .expect("raw 响应缺少 nodes");
+    assert_eq!(raw_nodes.len(), 5, "raw 应保留母版节点并聚合其它来源节点");
+    let raw_node_names = raw_nodes
+        .iter()
+        .filter_map(|node| node.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(raw_node_names.contains(&"HK-Template-1"));
+    assert!(raw_node_names.contains(&"HK-Template-2"));
+    assert!(raw_node_names.contains(&"HK-SS"));
+    assert!(raw_node_names.contains(&"SG-VMESS"));
+    assert!(raw_node_names.contains(&"US-Trojan"));
+
+    let base64_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/profiles/{profile_id}/base64?token={export_token}"
+                ))
+                .header(HOST, "127.0.0.1:18118")
+                .body(Body::empty())
+                .expect("构建 base64 请求失败"),
+        )
+        .await
+        .expect("获取 base64 订阅失败");
+    assert_eq!(base64_response.status(), StatusCode::OK);
+    let base64_bytes = to_bytes(base64_response.into_body(), 1024 * 1024)
+        .await
+        .expect("读取 base64 响应体失败");
+    let base64_text = String::from_utf8(base64_bytes.to_vec()).expect("base64 响应不是 UTF-8");
+    let decoded_base64 = BASE64_STANDARD
+        .decode(base64_text.as_bytes())
+        .expect("base64 响应应可解码");
+    let decoded_base64_text = String::from_utf8(decoded_base64).expect("base64 解码内容不是 UTF-8");
+    let base64_lines = decoded_base64_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(base64_lines.len(), 5, "base64 应导出最终聚合后的全部节点");
+    assert!(
+        decoded_base64_text.contains("hk-template-1.example.com"),
+        "base64 应包含 Clash 母版节点"
+    );
+    assert!(
+        decoded_base64_text.contains("hk-template-2.example.com"),
+        "base64 应包含 Clash 母版节点"
+    );
+    assert!(
+        decoded_base64_text.contains("us.example.com"),
+        "base64 应包含聚合来源节点"
+    );
 
     // 删除模板来源后，Profile 应回退为默认分组导出（Select/Auto/Region）。
     let delete_template_source_response = app
@@ -905,6 +1063,7 @@ async fn e2e_profile_clash_template_source_applies_template_groups() {
         String::from_utf8(clash_fallback_bytes.to_vec()).expect("回退 clash 响应不是 UTF-8");
     assert!(clash_fallback_text.contains("proxy-groups:"));
     assert!(!clash_fallback_text.contains("\nrules:"));
+    assert!(!clash_fallback_text.contains("mixed-port: 7890"));
     assert!(clash_fallback_text.contains("- name: Select"));
     assert!(clash_fallback_text.contains("- name: Auto"));
     assert!(clash_fallback_text.contains("- name: HK"));
@@ -1065,6 +1224,20 @@ async fn e2e_profile_singbox_template_source_converts_to_clash_groups_and_rules(
     assert!(clash_text.contains("- name: Auto"));
     assert!(clash_text.contains("- DOMAIN-SUFFIX,example.com,Proxy"));
     assert!(clash_text.contains("- MATCH,Proxy"));
+    assert!(clash_text.contains("name: old-node-a"));
+
+    let proxy_group_start = clash_text.find("- name: Proxy").expect("缺少 Proxy 分组块");
+    let proxy_group_tail = &clash_text[proxy_group_start..];
+    let proxy_group_end = proxy_group_tail
+        .get(1..)
+        .and_then(|tail| tail.find("\n- name: ").map(|index| index + 1))
+        .unwrap_or(proxy_group_tail.len());
+    let proxy_group_block = &proxy_group_tail[..proxy_group_end];
+    assert!(proxy_group_block.contains("- Auto"));
+    assert!(!proxy_group_block.contains("- old-node-a"));
+    assert!(!proxy_group_block.contains("- HK-SS"));
+    assert!(!proxy_group_block.contains("- SG-VMESS"));
+    assert!(!proxy_group_block.contains("- US-Trojan"));
 
     let auto_group_start = clash_text.find("- name: Auto").expect("缺少 Auto 分组块");
     let auto_group_tail = &clash_text[auto_group_start..];
@@ -1073,9 +1246,144 @@ async fn e2e_profile_singbox_template_source_converts_to_clash_groups_and_rules(
         .and_then(|tail| tail.find("\n- name: ").map(|index| index + 1))
         .unwrap_or(auto_group_tail.len());
     let auto_group_block = &auto_group_tail[..auto_group_end];
+    assert!(auto_group_block.contains("- old-node-a"));
     assert!(auto_group_block.contains("- HK-SS"));
     assert!(auto_group_block.contains("- SG-VMESS"));
     assert!(auto_group_block.contains("- US-Trojan"));
+
+    let singbox_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/profiles/{profile_id}/sing-box?token={export_token}"
+                ))
+                .header(HOST, "127.0.0.1:18118")
+                .body(Body::empty())
+                .expect("构建 sing-box 请求失败"),
+        )
+        .await
+        .expect("获取 sing-box 订阅失败");
+    assert_eq!(singbox_response.status(), StatusCode::OK);
+    let singbox_payload = read_json(singbox_response).await;
+    assert!(
+        singbox_payload.get("route").is_none(),
+        "sing-box 导出不应暴露 route"
+    );
+    assert!(
+        singbox_payload.get("dns").is_none(),
+        "sing-box 导出不应暴露 dns"
+    );
+    let singbox_outbounds = singbox_payload
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .expect("sing-box 响应缺少 outbounds");
+    let singbox_proxy_selector = singbox_outbounds
+        .iter()
+        .find(|outbound| outbound.get("tag").and_then(Value::as_str) == Some("Proxy"))
+        .expect("sing-box 响应缺少 Proxy selector");
+    let singbox_proxy_targets = singbox_proxy_selector
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .expect("Proxy selector 缺少 outbounds")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(singbox_proxy_targets.contains(&"Auto"));
+    assert!(singbox_proxy_targets.contains(&"direct"));
+    assert!(!singbox_proxy_targets.contains(&"old-node-a"));
+    assert!(!singbox_proxy_targets.contains(&"HK-SS"));
+    assert!(!singbox_proxy_targets.contains(&"SG-VMESS"));
+    assert!(!singbox_proxy_targets.contains(&"US-Trojan"));
+
+    let singbox_auto_group = singbox_outbounds
+        .iter()
+        .find(|outbound| outbound.get("tag").and_then(Value::as_str) == Some("Auto"))
+        .expect("sing-box 响应缺少 Auto urltest");
+    let singbox_auto_targets = singbox_auto_group
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .expect("Auto urltest 缺少 outbounds")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(singbox_auto_targets.contains(&"old-node-a"));
+    assert!(singbox_auto_targets.contains(&"HK-SS"));
+    assert!(singbox_auto_targets.contains(&"SG-VMESS"));
+    assert!(singbox_auto_targets.contains(&"US-Trojan"));
+
+    let raw_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/profiles/{profile_id}/raw?token={export_token}"
+                ))
+                .header(HOST, "127.0.0.1:18118")
+                .body(Body::empty())
+                .expect("构建 raw 请求失败"),
+        )
+        .await
+        .expect("获取 raw 订阅失败");
+    assert_eq!(raw_response.status(), StatusCode::OK);
+    let raw_payload = read_json(raw_response).await;
+    let raw_nodes = raw_payload
+        .get("nodes")
+        .and_then(Value::as_array)
+        .expect("raw 响应缺少 nodes");
+    assert_eq!(
+        raw_nodes.len(),
+        4,
+        "raw 应保留 sing-box 母版节点并聚合其它来源节点"
+    );
+    let raw_node_names = raw_nodes
+        .iter()
+        .filter_map(|node| node.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert!(raw_node_names.contains(&"old-node-a"));
+    assert!(raw_node_names.contains(&"HK-SS"));
+    assert!(raw_node_names.contains(&"SG-VMESS"));
+    assert!(raw_node_names.contains(&"US-Trojan"));
+
+    let base64_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/api/profiles/{profile_id}/base64?token={export_token}"
+                ))
+                .header(HOST, "127.0.0.1:18118")
+                .body(Body::empty())
+                .expect("构建 base64 请求失败"),
+        )
+        .await
+        .expect("获取 base64 订阅失败");
+    assert_eq!(base64_response.status(), StatusCode::OK);
+    let base64_bytes = to_bytes(base64_response.into_body(), 1024 * 1024)
+        .await
+        .expect("读取 base64 响应体失败");
+    let base64_text = String::from_utf8(base64_bytes.to_vec()).expect("base64 响应不是 UTF-8");
+    let decoded_base64 = BASE64_STANDARD
+        .decode(base64_text.as_bytes())
+        .expect("base64 响应应可解码");
+    let decoded_base64_text = String::from_utf8(decoded_base64).expect("base64 解码内容不是 UTF-8");
+    let base64_lines = decoded_base64_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(base64_lines.len(), 4, "base64 应导出最终聚合后的全部节点");
+    assert!(
+        decoded_base64_text.contains("old-node.example.com"),
+        "base64 应包含 sing-box 母版节点"
+    );
+    assert!(
+        decoded_base64_text.contains("us.example.com"),
+        "base64 应包含聚合来源节点"
+    );
 
     template_server_task.abort();
     nodes_server_task.abort();

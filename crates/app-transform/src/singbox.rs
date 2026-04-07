@@ -1,13 +1,18 @@
-use std::collections::BTreeMap;
-
-use app_common::{Profile, ProxyNode, ProxyProtocol, ProxyTransport};
+use app_common::{ClashRoutingTemplate, Profile, ProxyNode};
 use serde::Serialize;
 
-use crate::shared::{
-    optional_bool, optional_string, optional_string_list, optional_u32, push_unique_proxy_name,
-    required_string,
+use crate::shared::push_unique_proxy_name;
+use crate::{TransformResult, Transformer};
+
+#[path = "singbox_outbound.rs"]
+mod outbound;
+#[path = "singbox_template_utils.rs"]
+mod template_utils;
+use outbound::{SingboxObfs, SingboxTls, SingboxTransport, build_singbox_node_outbound};
+use template_utils::{
+    build_builtin_outbounds, filter_group_candidate_tags, is_builtin_policy,
+    normalize_policy_reference,
 };
-use crate::{TransformError, TransformResult, Transformer};
 
 /// sing-box JSON 转换器。
 #[derive(Debug, Clone)]
@@ -29,49 +34,48 @@ impl Default for SingboxTransformer {
 
 impl Transformer for SingboxTransformer {
     fn transform(&self, nodes: &[ProxyNode], _profile: &Profile) -> TransformResult<String> {
-        let mut node_tags = Vec::with_capacity(nodes.len());
-        let mut outbounds = Vec::with_capacity(nodes.len() + 2);
+        self.transform_with_template(nodes, None)
+    }
+}
 
+impl SingboxTransformer {
+    pub fn transform_with_template(
+        &self,
+        nodes: &[ProxyNode],
+        routing_template: Option<&ClashRoutingTemplate>,
+    ) -> TransformResult<String> {
+        let mut node_tags = Vec::with_capacity(nodes.len());
+        let mut node_outbounds = Vec::with_capacity(nodes.len());
         for node in nodes {
             node_tags.push(node.name.clone());
-            outbounds.push(build_singbox_node_outbound(node)?);
+            node_outbounds.push(build_singbox_node_outbound(node)?);
         }
 
+        let mut group_outbounds = match routing_template {
+            Some(template) => self.build_template_groups(nodes, template),
+            None => self.build_default_groups(&node_tags),
+        };
+        let mut builtin_outbounds = build_builtin_outbounds(&group_outbounds);
+
+        let mut outbounds = Vec::with_capacity(
+            builtin_outbounds.len() + group_outbounds.len() + node_outbounds.len(),
+        );
+        outbounds.append(&mut builtin_outbounds);
+        outbounds.append(&mut group_outbounds);
+        outbounds.extend(node_outbounds);
+
+        let config = SingboxConfig { outbounds };
+        Ok(serde_json::to_string_pretty(&config)?)
+    }
+
+    fn build_default_groups(&self, node_tags: &[String]) -> Vec<SingboxOutbound> {
         let mut selector_targets = Vec::with_capacity(node_tags.len() + 1);
         push_unique_proxy_name(&mut selector_targets, "auto");
-        for tag in &node_tags {
+        for tag in node_tags {
             push_unique_proxy_name(&mut selector_targets, tag);
         }
 
-        outbounds.insert(
-            0,
-            SingboxOutbound {
-                outbound_type: "urltest".to_string(),
-                tag: "auto".to_string(),
-                outbounds: Some(node_tags),
-                default: None,
-                url: Some(self.auto_test_url.clone()),
-                interval: Some(self.auto_test_interval.clone()),
-                tolerance: Some(self.auto_test_tolerance),
-                server: None,
-                server_port: None,
-                method: None,
-                password: None,
-                uuid: None,
-                security: None,
-                alter_id: None,
-                flow: None,
-                network: None,
-                tls: None,
-                transport: None,
-                obfs: None,
-                congestion_control: None,
-                udp_relay_mode: None,
-            },
-        );
-
-        outbounds.insert(
-            0,
+        vec![
             SingboxOutbound {
                 outbound_type: "selector".to_string(),
                 tag: "select".to_string(),
@@ -95,172 +99,146 @@ impl Transformer for SingboxTransformer {
                 congestion_control: None,
                 udp_relay_mode: None,
             },
-        );
-
-        let config = SingboxConfig { outbounds };
-        Ok(serde_json::to_string_pretty(&config)?)
+            SingboxOutbound {
+                outbound_type: "urltest".to_string(),
+                tag: "auto".to_string(),
+                outbounds: Some(node_tags.to_vec()),
+                default: None,
+                url: Some(self.auto_test_url.clone()),
+                interval: Some(self.auto_test_interval.clone()),
+                tolerance: Some(self.auto_test_tolerance),
+                server: None,
+                server_port: None,
+                method: None,
+                password: None,
+                uuid: None,
+                security: None,
+                alter_id: None,
+                flow: None,
+                network: None,
+                tls: None,
+                transport: None,
+                obfs: None,
+                congestion_control: None,
+                udp_relay_mode: None,
+            },
+        ]
     }
-}
 
-fn build_singbox_node_outbound(node: &ProxyNode) -> TransformResult<SingboxOutbound> {
-    let tls = build_singbox_tls(node);
-    let transport = build_singbox_transport(node);
+    fn build_template_groups(
+        &self,
+        nodes: &[ProxyNode],
+        routing_template: &ClashRoutingTemplate,
+    ) -> Vec<SingboxOutbound> {
+        let aggregated_node_tags = nodes
+            .iter()
+            .map(|node| node.name.clone())
+            .collect::<Vec<_>>();
+        let group_name_set = routing_template
+            .groups
+            .iter()
+            .map(|group| group.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
 
-    let mut outbound = SingboxOutbound {
-        outbound_type: String::new(),
-        tag: node.name.clone(),
-        outbounds: None,
-        default: None,
-        url: None,
-        interval: None,
-        tolerance: None,
-        server: Some(node.server.clone()),
-        server_port: Some(node.port),
-        method: None,
-        password: None,
-        uuid: None,
-        security: None,
-        alter_id: None,
-        flow: None,
-        network: None,
-        tls,
-        transport: None,
-        obfs: None,
-        congestion_control: None,
-        udp_relay_mode: None,
-    };
-
-    match node.protocol {
-        ProxyProtocol::Ss => {
-            outbound.outbound_type = "shadowsocks".to_string();
-            outbound.method = Some(required_string(node, "cipher")?);
-            outbound.password = Some(required_string(node, "password")?);
-            outbound.tls = None;
-            outbound.transport = None;
-        }
-        ProxyProtocol::Vmess => {
-            outbound.outbound_type = "vmess".to_string();
-            outbound.uuid = Some(required_string(node, "uuid")?);
-            outbound.security = optional_string(node, "security")
-                .or_else(|| optional_string(node, "cipher"))
-                .or(Some("auto".to_string()));
-            outbound.alter_id = optional_u32(node, "alter_id").or(Some(0));
-            outbound.network = Some("tcp".to_string());
-            outbound.transport = transport;
-        }
-        ProxyProtocol::Vless => {
-            outbound.outbound_type = "vless".to_string();
-            outbound.uuid = Some(required_string(node, "uuid")?);
-            outbound.flow = optional_string(node, "flow");
-            outbound.network = Some("tcp".to_string());
-            outbound.transport = transport;
-        }
-        ProxyProtocol::Trojan => {
-            outbound.outbound_type = "trojan".to_string();
-            outbound.password = Some(required_string(node, "password")?);
-            outbound.network = Some("tcp".to_string());
-            outbound.transport = transport;
-        }
-        ProxyProtocol::Hysteria2 => {
-            outbound.outbound_type = "hysteria2".to_string();
-            outbound.password = Some(
-                optional_string(node, "password")
-                    .or_else(|| optional_string(node, "auth"))
-                    .ok_or_else(|| TransformError::MissingField {
-                        node_name: node.name.clone(),
-                        field: "password/auth",
-                    })?,
+        let mut groups = Vec::with_capacity(routing_template.groups.len());
+        for template_group in &routing_template.groups {
+            let candidate_tags = filter_group_candidate_tags(
+                &aggregated_node_tags,
+                template_group.filter.as_deref(),
+                template_group.exclude_filter.as_deref(),
             );
-            if let Some(obfs_type) = optional_string(node, "obfs") {
-                outbound.obfs = Some(SingboxObfs {
-                    obfs_type,
-                    password: optional_string(node, "obfs_password"),
-                });
+            let has_plain_node_slot = template_group
+                .proxies
+                .iter()
+                .any(|item| !group_name_set.contains(item.as_str()) && !is_builtin_policy(item));
+            let should_append_nodes = has_plain_node_slot
+                || (template_group.proxies.is_empty()
+                    && (template_group.include_all || template_group.use_provider));
+
+            let mut targets = Vec::new();
+            if routing_template.preserve_original_proxy_names {
+                for item in &template_group.proxies {
+                    push_unique_proxy_name(&mut targets, &normalize_policy_reference(item));
+                }
+                if should_append_nodes {
+                    for tag in &candidate_tags {
+                        push_unique_proxy_name(&mut targets, tag);
+                    }
+                }
+            } else {
+                let mut inserted_aggregated = false;
+                for item in &template_group.proxies {
+                    if group_name_set.contains(item.as_str()) || is_builtin_policy(item) {
+                        push_unique_proxy_name(&mut targets, &normalize_policy_reference(item));
+                        continue;
+                    }
+                    if !inserted_aggregated {
+                        for tag in &candidate_tags {
+                            push_unique_proxy_name(&mut targets, tag);
+                        }
+                        inserted_aggregated = true;
+                    }
+                }
+                if !inserted_aggregated && should_append_nodes {
+                    for tag in &candidate_tags {
+                        push_unique_proxy_name(&mut targets, tag);
+                    }
+                }
             }
-            outbound.transport = None;
+
+            let is_urltest = matches!(
+                template_group
+                    .group_type
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "url-test" | "urltest"
+            );
+            groups.push(SingboxOutbound {
+                outbound_type: if is_urltest {
+                    "urltest".to_string()
+                } else {
+                    "selector".to_string()
+                },
+                tag: template_group.name.clone(),
+                outbounds: Some(targets),
+                default: None,
+                url: is_urltest.then(|| {
+                    template_group
+                        .url
+                        .clone()
+                        .unwrap_or_else(|| self.auto_test_url.clone())
+                }),
+                interval: is_urltest.then(|| {
+                    template_group
+                        .interval
+                        .map(|value| format!("{value}s"))
+                        .unwrap_or_else(|| self.auto_test_interval.clone())
+                }),
+                tolerance: is_urltest
+                    .then_some(template_group.tolerance.unwrap_or(self.auto_test_tolerance)),
+                server: None,
+                server_port: None,
+                method: None,
+                password: None,
+                uuid: None,
+                security: None,
+                alter_id: None,
+                flow: None,
+                network: None,
+                tls: None,
+                transport: None,
+                obfs: None,
+                congestion_control: None,
+                udp_relay_mode: None,
+            });
         }
-        ProxyProtocol::Tuic => {
-            outbound.outbound_type = "tuic".to_string();
-            outbound.uuid = Some(required_string(node, "uuid")?);
-            outbound.password = Some(required_string(node, "password")?);
-            outbound.congestion_control = optional_string(node, "congestion_control");
-            outbound.udp_relay_mode = optional_string(node, "udp_relay_mode");
-            outbound.network = Some("tcp".to_string());
-            outbound.transport = None;
+
+        if groups.is_empty() {
+            self.build_default_groups(&aggregated_node_tags)
+        } else {
+            groups
         }
-    }
-
-    Ok(outbound)
-}
-
-fn build_singbox_tls(node: &ProxyNode) -> Option<SingboxTls> {
-    let server_name = node
-        .tls
-        .server_name
-        .clone()
-        .or_else(|| optional_string(node, "sni"));
-    let insecure = optional_bool(node, "skip_cert_verify");
-    let alpn = optional_string_list(node, "alpn");
-    let has_fields =
-        server_name.is_some() || insecure.is_some() || alpn.is_some() || node.tls.enabled;
-    if !has_fields {
-        return None;
-    }
-
-    Some(SingboxTls {
-        enabled: node.tls.enabled,
-        server_name,
-        insecure,
-        alpn,
-    })
-}
-
-fn build_singbox_transport(node: &ProxyNode) -> Option<SingboxTransport> {
-    match node.transport {
-        ProxyTransport::Tcp => None,
-        ProxyTransport::Ws => {
-            let mut headers = BTreeMap::new();
-            if let Some(host) = optional_string(node, "host") {
-                headers.insert("Host".to_string(), host);
-            }
-            Some(SingboxTransport {
-                transport_type: "ws".to_string(),
-                path: optional_string(node, "path"),
-                headers: (!headers.is_empty()).then_some(headers),
-                host: None,
-                service_name: None,
-                max_early_data: optional_u32(node, "max_early_data"),
-                early_data_header_name: optional_string(node, "early_data_header_name"),
-            })
-        }
-        ProxyTransport::Grpc => Some(SingboxTransport {
-            transport_type: "grpc".to_string(),
-            path: None,
-            headers: None,
-            host: None,
-            service_name: optional_string(node, "grpc_service_name")
-                .or_else(|| optional_string(node, "service_name")),
-            max_early_data: None,
-            early_data_header_name: None,
-        }),
-        ProxyTransport::H2 => Some(SingboxTransport {
-            transport_type: "http".to_string(),
-            path: optional_string(node, "path"),
-            headers: None,
-            host: optional_string_list(node, "host"),
-            service_name: None,
-            max_early_data: None,
-            early_data_header_name: None,
-        }),
-        ProxyTransport::Quic => Some(SingboxTransport {
-            transport_type: "quic".to_string(),
-            path: None,
-            headers: None,
-            host: None,
-            service_name: None,
-            max_early_data: None,
-            early_data_header_name: None,
-        }),
     }
 }
 
@@ -270,7 +248,7 @@ struct SingboxConfig {
 }
 
 #[derive(Debug, Serialize)]
-struct SingboxOutbound {
+pub(super) struct SingboxOutbound {
     #[serde(rename = "type")]
     outbound_type: String,
     tag: String,
@@ -312,41 +290,4 @@ struct SingboxOutbound {
     congestion_control: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     udp_relay_mode: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct SingboxTls {
-    enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    server_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    insecure: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    alpn: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize)]
-struct SingboxTransport {
-    #[serde(rename = "type")]
-    transport_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    headers: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    host: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    service_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_early_data: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    early_data_header_name: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct SingboxObfs {
-    #[serde(rename = "type")]
-    obfs_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    password: Option<String>,
 }

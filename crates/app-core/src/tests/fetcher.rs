@@ -180,9 +180,16 @@ fn static_fetcher_extracts_and_persists_clash_routing_template() {
 
     let fetcher = StaticFetcher::new(&db).expect("初始化 StaticFetcher 失败");
     let payload = r#"
+mixed-port: 7890
+dns:
+  enable: true
 proxies:
   - name: old-node-a
     type: ss
+    server: ss-a.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: p@ss
 proxy-groups:
   - name: Proxy
     type: select
@@ -202,7 +209,8 @@ rules:
     let nodes = fetcher
         .parse_and_cache_content("source-fetch-template", payload)
         .expect("缓存模板内容不应失败");
-    assert!(nodes.is_empty(), "Clash YAML 不应被 URI 解析器误解析为节点");
+    assert_eq!(nodes.len(), 1, "Clash 母版来源自身节点应被保留");
+    assert_eq!(nodes[0].name, "old-node-a");
 
     let repository = SettingsRepository::new(&db);
     let setting = repository
@@ -214,6 +222,13 @@ rules:
     assert_eq!(template.groups.len(), 2);
     assert_eq!(template.groups[0].name, "Proxy");
     assert_eq!(template.rules, vec!["MATCH,Proxy".to_string()]);
+    assert!(template.preserve_original_proxy_names);
+    assert!(
+        template
+            .base_config_yaml
+            .as_deref()
+            .is_some_and(|value| value.contains("mixed-port: 7890"))
+    );
 }
 
 #[test]
@@ -242,6 +257,14 @@ fn static_fetcher_extracts_singbox_template_and_converts_to_clash_semantics() {
       "outbounds": ["old-node-a"],
       "url": "http://www.gstatic.com/generate_204",
       "interval": 300
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "old-node-a",
+      "server": "ss-old.example.com",
+      "server_port": 443,
+      "method": "aes-128-gcm",
+      "password": "p@ss"
     }
   ],
   "route": {
@@ -258,10 +281,8 @@ fn static_fetcher_extracts_singbox_template_and_converts_to_clash_semantics() {
     let nodes = fetcher
         .parse_and_cache_content("source-fetch-template-singbox", payload)
         .expect("缓存 sing-box 模板内容不应失败");
-    assert!(
-        nodes.is_empty(),
-        "sing-box 模板不应被 URI 解析器误解析为节点"
-    );
+    assert_eq!(nodes.len(), 1, "sing-box 母版来源自身节点应被保留");
+    assert_eq!(nodes[0].name, "old-node-a");
 
     let repository = SettingsRepository::new(&db);
     let setting = repository
@@ -273,6 +294,7 @@ fn static_fetcher_extracts_singbox_template_and_converts_to_clash_semantics() {
     assert_eq!(template.groups.len(), 2);
     assert_eq!(template.groups[0].name, "Proxy");
     assert_eq!(template.groups[1].group_type, "url-test");
+    assert!(template.preserve_original_proxy_names);
     assert_eq!(
         template.rules,
         vec![
@@ -359,6 +381,51 @@ proxy-groups:
         parse_calls.load(Ordering::SeqCst),
         0,
         "模板内容命中时不应进入 URI 解析器"
+    );
+}
+
+#[test]
+fn static_fetcher_parses_clash_yaml_nodes_without_using_uri_parser() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let source_repository = SourceRepository::new(&db);
+    source_repository
+        .insert(&sample_source(
+            "source-fetch-parser-clash",
+            "subforge.builtin.static",
+        ))
+        .expect("写入来源实例失败");
+
+    let parse_calls = Arc::new(AtomicUsize::new(0));
+    let fetcher = StaticFetcher::with_parser(
+        &db,
+        CountingParser {
+            parse_calls: parse_calls.clone(),
+        },
+    )
+    .expect("初始化 StaticFetcher 失败");
+
+    let payload = r#"
+proxies:
+  - name: clash-node
+    type: trojan
+    server: trojan.example.com
+    port: 443
+    password: trojan-pass
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - clash-node
+"#;
+    let nodes = fetcher
+        .parse_and_cache_content("source-fetch-parser-clash", payload)
+        .expect("Clash YAML 内容解析应成功");
+
+    assert_eq!(nodes.len(), 1, "Clash YAML 节点应被直接解析");
+    assert_eq!(
+        parse_calls.load(Ordering::SeqCst),
+        0,
+        "Clash YAML 命中时不应进入 URI 解析器"
     );
 }
 
