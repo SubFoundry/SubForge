@@ -45,4 +45,4 @@ my-plugin/
 ## 典型 schema
 
 - `url`（必填）
-- `user_agent`（可选）
+- `user_agent`（可选；内置静态插件默认值为 `clash.meta`）

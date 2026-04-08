@@ -126,6 +126,9 @@ password = { env = "SUBFORGE_SCRIPT_PASSWORD" }
 - `[sources.secrets]`：密钥字段（进入 SecretStore），常见写法：
   - `{ env = "ENV_NAME" }`
   - `{ value = "plaintext-for-testing" }`（仅本地调试）
+- 对内置静态插件 `subforge.builtin.static`：
+  - `url` 为必填。
+  - 若未显式提供 `user_agent`，系统会自动补默认值 `clash.meta`。
 
 ## profiles
 

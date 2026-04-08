@@ -6,8 +6,12 @@
 
 ## 管理 API（admin_token）
 
-- `GET /api/system/status`
+- `GET /api/system/settings`
 - `PUT /api/system/settings`
+- `GET /api/system/status`
+- `POST /api/admin-token/rotate`
+- `POST /api/system/shutdown`
+- `GET /api/logs`
 - `GET /api/plugins`
 - `POST /api/plugins/import`
 - `DELETE /api/plugins/{id}`
@@ -25,6 +29,12 @@
 - `POST /api/profiles/{id}/refresh`
 - `POST /api/tokens/{profile_id}/rotate`
 - `GET /api/events`（SSE）
+
+说明：
+- `/api/system/settings`：读取或更新轻量系统设置键值。
+- `/api/admin-token/rotate`：轮换管理 token，并立即替换内存与文件中的旧值。
+- `/api/system/shutdown`：请求 Core 优雅关停。
+- `/api/logs`：刷新任务与脚本日志查询；支持 `limit`、`offset`、`status`、`source_id`、`include_script_logs` 查询参数。
 
 ## 配置读取 API（export_token）
 

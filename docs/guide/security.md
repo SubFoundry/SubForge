@@ -2,7 +2,7 @@
 
 ## HTTP 安全基线
 
-- Host Header 白名单校验（`127.0.0.1` / `localhost` / `[::1]`）
+- Host Header 白名单校验（`127.0.0.1` / `localhost` / `[::1]` 及对应 `:port` 形式）
 - 默认拒绝跨域（不返回 `Access-Control-Allow-Origin`）
 - 双 token 隔离：
   - `admin_token`：管理接口（Header `Authorization: Bearer`）
