@@ -272,8 +272,8 @@ fn clash_routing_template_defaults_preserve_flag_to_false_when_omitted() {
     let deserialized =
         serde_json::from_str::<ClashRoutingTemplate>(&json).expect("反序列化不应失败");
 
-    assert_eq!(
-        deserialized.preserve_original_proxy_names, false,
+    assert!(
+        !deserialized.preserve_original_proxy_names,
         "省略字段反序列化后应默认为 false"
     );
     assert_eq!(deserialized, original, "往返不一致");
