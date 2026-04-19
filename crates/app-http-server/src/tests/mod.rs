@@ -104,7 +104,10 @@ pub(super) fn build_builtin_plugin_zip_bytes() -> Vec<u8> {
             writer
                 .start_file(file_name, options)
                 .expect("写入 zip 条目失败");
-            let bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
+            let mut bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
+            if file_name == "plugin.json" {
+                bytes = bytes.replace("subforge.builtin.static", "test.plugin.import-stub");
+            }
             writer.write_all(&bytes).expect("写入 zip 数据失败");
         }
         writer.finish().expect("完成 zip 构建失败");
@@ -122,7 +125,8 @@ pub(super) fn build_builtin_plugin_zip_bytes_with_network_profile(
         .replace(
             r#""network_profile": "standard""#,
             &format!(r#""network_profile": "{network_profile}""#),
-        );
+        )
+        .replace("subforge.builtin.static", "test.plugin.import-stub");
 
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
@@ -162,7 +166,10 @@ pub(super) fn build_builtin_plugin_zip_bytes_with_root_dir(root_dir: &str) -> Ve
             writer
                 .start_file(zip_entry, options)
                 .expect("写入 zip 条目失败");
-            let bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
+            let mut bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
+            if file_name == "plugin.json" {
+                bytes = bytes.replace("subforge.builtin.static", "test.plugin.import-stub");
+            }
             writer.write_all(&bytes).expect("写入 zip 数据失败");
         }
         writer.finish().expect("完成 zip 构建失败");
@@ -182,7 +189,10 @@ pub(super) fn build_builtin_plugin_zip_bytes_with_backslash_root_dir(root_dir: &
             writer
                 .start_file(zip_entry, options)
                 .expect("写入 zip 条目失败");
-            let bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
+            let mut bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
+            if file_name == "plugin.json" {
+                bytes = bytes.replace("subforge.builtin.static", "test.plugin.import-stub");
+            }
             writer.write_all(&bytes).expect("写入 zip 数据失败");
         }
         writer.finish().expect("完成 zip 构建失败");
