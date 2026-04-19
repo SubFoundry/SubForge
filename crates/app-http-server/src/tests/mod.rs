@@ -106,7 +106,10 @@ pub(super) fn build_builtin_plugin_zip_bytes() -> Vec<u8> {
                 .expect("写入 zip 条目失败");
             let mut bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
             if file_name == "plugin.json" {
-                bytes = bytes.replace("subforge.builtin.static", "test.plugin.import-stub");
+                let s = String::from_utf8_lossy(&bytes).into_owned();
+                bytes = s
+                    .replace("subforge.builtin.static", "test.plugin.import-stub")
+                    .into_bytes();
             }
             writer.write_all(&bytes).expect("写入 zip 数据失败");
         }
@@ -168,7 +171,10 @@ pub(super) fn build_builtin_plugin_zip_bytes_with_root_dir(root_dir: &str) -> Ve
                 .expect("写入 zip 条目失败");
             let mut bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
             if file_name == "plugin.json" {
-                bytes = bytes.replace("subforge.builtin.static", "test.plugin.import-stub");
+                let s = String::from_utf8_lossy(&bytes).into_owned();
+                bytes = s
+                    .replace("subforge.builtin.static", "test.plugin.import-stub")
+                    .into_bytes();
             }
             writer.write_all(&bytes).expect("写入 zip 数据失败");
         }
@@ -191,7 +197,10 @@ pub(super) fn build_builtin_plugin_zip_bytes_with_backslash_root_dir(root_dir: &
                 .expect("写入 zip 条目失败");
             let mut bytes = fs::read(plugin_dir.join(file_name)).expect("读取内置插件文件失败");
             if file_name == "plugin.json" {
-                bytes = bytes.replace("subforge.builtin.static", "test.plugin.import-stub");
+                let s = String::from_utf8_lossy(&bytes).into_owned();
+                bytes = s
+                    .replace("subforge.builtin.static", "test.plugin.import-stub")
+                    .into_bytes();
             }
             writer.write_all(&bytes).expect("写入 zip 数据失败");
         }
