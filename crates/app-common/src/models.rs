@@ -173,6 +173,7 @@ pub enum ProxyProtocol {
     Trojan,
     Hysteria2,
     Tuic,
+    AnyTls,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

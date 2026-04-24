@@ -96,6 +96,12 @@ pub(super) fn build_singbox_node_outbound(node: &ProxyNode) -> TransformResult<S
             outbound.network = Some("tcp".to_string());
             outbound.transport = None;
         }
+        ProxyProtocol::AnyTls => {
+            outbound.outbound_type = "anytls".to_string();
+            outbound.password = Some(required_string(node, "password")?);
+            outbound.network = Some("tcp".to_string());
+            outbound.transport = None;
+        }
     }
 
     Ok(outbound)

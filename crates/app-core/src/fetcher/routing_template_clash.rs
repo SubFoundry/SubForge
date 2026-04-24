@@ -98,6 +98,7 @@ fn parse_clash_proxy(item: &YamlValue, source_id: &str, updated_at: &str) -> Cor
         "trojan" => ProxyProtocol::Trojan,
         "hysteria2" => ProxyProtocol::Hysteria2,
         "tuic" => ProxyProtocol::Tuic,
+        "anytls" => ProxyProtocol::AnyTls,
         _ => {
             return Err(CoreError::SubscriptionParse(format!(
                 "不支持的 Clash 节点类型：{}",
@@ -117,6 +118,7 @@ fn parse_clash_proxy(item: &YamlValue, source_id: &str, updated_at: &str) -> Cor
                 | ProxyProtocol::Trojan
                 | ProxyProtocol::Hysteria2
                 | ProxyProtocol::Tuic
+                | ProxyProtocol::AnyTls
         )),
         server_name: proxy.servername.or(proxy.sni.clone()),
     };
@@ -138,6 +140,7 @@ fn parse_clash_proxy(item: &YamlValue, source_id: &str, updated_at: &str) -> Cor
         proxy.congestion_controller,
     );
     insert_optional_string(&mut extra, "udp_relay_mode", proxy.udp_relay_mode);
+    insert_optional_bool(&mut extra, "udp", proxy.udp);
 
     if let Some(ws_opts) = proxy.ws_opts {
         insert_optional_string(&mut extra, "path", ws_opts.path);
@@ -170,6 +173,7 @@ fn parse_clash_proxy(item: &YamlValue, source_id: &str, updated_at: &str) -> Cor
 fn resolve_transport(protocol: &ProxyProtocol, network: Option<&str>) -> ProxyTransport {
     match protocol {
         ProxyProtocol::Hysteria2 | ProxyProtocol::Tuic => ProxyTransport::Quic,
+        ProxyProtocol::AnyTls => ProxyTransport::Tcp,
         _ => map_transport(
             network
                 .map(str::trim)
@@ -191,6 +195,7 @@ fn validate_required_fields(
         ProxyProtocol::Trojan => &["password"][..],
         ProxyProtocol::Hysteria2 => &["password"][..],
         ProxyProtocol::Tuic => &["uuid", "password"][..],
+        ProxyProtocol::AnyTls => &["password"][..],
     };
 
     for key in required {
@@ -279,6 +284,8 @@ struct RawClashProxy {
     uuid: Option<String>,
     #[serde(rename = "alterId", default)]
     alter_id: Option<u64>,
+    #[serde(default)]
+    udp: Option<bool>,
     #[serde(default)]
     tls: Option<bool>,
     #[serde(default)]

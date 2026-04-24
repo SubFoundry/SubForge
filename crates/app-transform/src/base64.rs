@@ -32,6 +32,7 @@ fn build_share_uri(node: &ProxyNode) -> TransformResult<String> {
         ProxyProtocol::Trojan => build_trojan_uri(node),
         ProxyProtocol::Hysteria2 => build_hysteria2_uri(node),
         ProxyProtocol::Tuic => build_tuic_uri(node),
+        ProxyProtocol::AnyTls => build_anytls_uri(node),
     }
 }
 
@@ -148,6 +149,29 @@ fn build_trojan_uri(node: &ProxyNode) -> TransformResult<String> {
     }
     Ok(build_uri_with_query(
         "trojan",
+        &percent_encode_userinfo(&password),
+        node,
+        &params,
+    ))
+}
+
+fn build_anytls_uri(node: &ProxyNode) -> TransformResult<String> {
+    let password = required_string(node, "password")?;
+    let mut params = Vec::<(String, String)>::new();
+    push_query_param(&mut params, "sni", node_server_name(node));
+    if let Some(alpn) = optional_string_list(node, "alpn") {
+        push_query_param(&mut params, "alpn", Some(alpn.join(",")));
+    }
+    push_query_param(
+        &mut params,
+        "fp",
+        optional_string(node, "client_fingerprint"),
+    );
+    if optional_bool(node, "skip_cert_verify").unwrap_or(false) {
+        push_query_param(&mut params, "allowInsecure", Some("1".to_string()));
+    }
+    Ok(build_uri_with_query(
+        "anytls",
         &percent_encode_userinfo(&password),
         node,
         &params,

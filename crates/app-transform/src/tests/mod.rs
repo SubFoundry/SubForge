@@ -127,6 +127,44 @@ fn snapshot_tuic_proxy_yaml() {
 }
 
 #[test]
+fn anytls_proxy_yaml_contains_expected_fields() {
+    let node = build_node(
+        "ANYTLS-HK",
+        ProxyProtocol::AnyTls,
+        ProxyTransport::Tcp,
+        Some("hk"),
+        vec![
+            ("password", Value::String("anytls-pass".to_string())),
+            ("client_fingerprint", Value::String("chrome".to_string())),
+            ("alpn", json!(["h2", "http/1.1"])),
+            (
+                "skip_cert_verify",
+                Value::Bool(true),
+            ),
+        ],
+    );
+    let yaml = ClashTransformer::default()
+        .transform(&[node], &test_profile())
+        .expect("AnyTLS 节点导出 Clash YAML 失败");
+    let value: Value = serde_yaml::from_str(&yaml).expect("AnyTLS 输出 YAML 解析失败");
+    let proxy = value
+        .get("proxies")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .expect("输出应包含 AnyTLS 节点");
+
+    assert_eq!(proxy.get("type").and_then(Value::as_str), Some("anytls"));
+    assert_eq!(proxy.get("password").and_then(Value::as_str), Some("anytls-pass"));
+    assert_eq!(proxy.get("network").and_then(Value::as_str), Some("tcp"));
+    assert_eq!(proxy.get("sni").and_then(Value::as_str), Some("tls.example.com"));
+    assert_eq!(
+        proxy.get("client-fingerprint").and_then(Value::as_str),
+        Some("chrome")
+    );
+}
+
+
+#[test]
 fn snapshot_ss_outbound_json() {
     assert_json_snapshot(
         build_node(

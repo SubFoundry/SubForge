@@ -72,6 +72,7 @@ fn parse_singbox_node(
         "trojan" => ProxyProtocol::Trojan,
         "hysteria2" => ProxyProtocol::Hysteria2,
         "tuic" => ProxyProtocol::Tuic,
+        "anytls" => ProxyProtocol::AnyTls,
         _ => return Ok(None),
     };
 
@@ -127,6 +128,9 @@ fn parse_singbox_node(
                 "udp_relay_mode",
                 string_value(map.get("udp_relay_mode")),
             );
+        }
+        ProxyProtocol::AnyTls => {
+            insert_optional_string(&mut extra, "password", string_value(map.get("password")));
         }
     }
 
@@ -224,6 +228,7 @@ fn validate_required_fields(
         ProxyProtocol::Trojan => &["password"][..],
         ProxyProtocol::Hysteria2 => &["password"][..],
         ProxyProtocol::Tuic => &["uuid", "password"][..],
+        ProxyProtocol::AnyTls => &["password"][..],
     };
 
     for key in required {

@@ -125,6 +125,18 @@ pub(super) fn build_clash_proxy(node: &ProxyNode) -> TransformResult<ClashProxy>
             proxy.h2_opts = None;
             proxy.ws_opts = None;
         }
+        ProxyProtocol::AnyTls => {
+            proxy.proxy_type = "anytls".to_string();
+            proxy.password = Some(required_string(node, "password")?);
+            proxy.network = Some("tcp".to_string());
+            proxy.alter_id = None;
+            proxy.cipher = None;
+            proxy.uuid = None;
+            proxy.flow = None;
+            proxy.grpc_opts = None;
+            proxy.h2_opts = None;
+            proxy.ws_opts = None;
+        }
     }
 
     Ok(proxy)

@@ -484,6 +484,66 @@ proxy-groups:
 }
 
 #[test]
+fn static_fetcher_parses_anytls_clash_yaml_nodes_without_using_uri_parser() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let source_repository = SourceRepository::new(&db);
+    source_repository
+        .insert(&sample_source(
+            "source-fetch-parser-clash-anytls",
+            "subforge.builtin.static",
+        ))
+        .expect("写入来源实例失败");
+
+    let parse_calls = Arc::new(AtomicUsize::new(0));
+    let fetcher = StaticFetcher::with_parser(
+        &db,
+        CountingParser {
+            parse_calls: parse_calls.clone(),
+        },
+    )
+    .expect("初始化 StaticFetcher 失败");
+
+    let payload = r#"
+proxies:
+  - name: anytls-node
+    type: anytls
+    server: anytls.example.com
+    port: 443
+    password: anytls-pass
+    udp: true
+    client-fingerprint: chrome
+    alpn:
+      - h2
+      - http/1.1
+    sni: officecdn.microsoft.com
+    skip-cert-verify: true
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - anytls-node
+"#;
+    let nodes = fetcher
+        .parse_and_cache_content("source-fetch-parser-clash-anytls", payload)
+        .expect("AnyTLS Clash YAML 内容解析应成功");
+
+    assert_eq!(nodes.len(), 1, "AnyTLS Clash YAML 节点应被直接解析");
+    assert_eq!(nodes[0].protocol, ProxyProtocol::AnyTls);
+    assert_eq!(nodes[0].name, "anytls-node");
+    assert_eq!(nodes[0].server, "anytls.example.com");
+    assert_eq!(nodes[0].port, 443);
+    assert_eq!(
+        nodes[0].extra.get("password").and_then(|value| value.as_str()),
+        Some("anytls-pass")
+    );
+    assert_eq!(
+        parse_calls.load(Ordering::SeqCst),
+        0,
+        "Clash YAML 命中时不应进入 URI 解析器"
+    );
+}
+
+#[test]
 fn static_fetcher_uses_uri_parser_when_payload_is_not_routing_template() {
     let db = Database::open_in_memory().expect("内存数据库初始化失败");
     let source_repository = SourceRepository::new(&db);
