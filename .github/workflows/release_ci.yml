@@ -352,6 +352,7 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm -C apps/desktop tauri build --ci --bundles deb,appimage --target ${{ matrix.target }}
       - name: Copy builtin plugins to bundle
+        shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
             PLUGIN_RESOURCES_DIR="target/${{ matrix.target }}/release/bundle/nsis/resources"
