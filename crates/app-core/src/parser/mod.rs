@@ -3,16 +3,22 @@ use app_common::ProxyNode;
 use crate::utils::{now_rfc3339, safe_stderr_line};
 use crate::{CoreError, CoreResult};
 
+mod anytls;
 mod base64;
 mod common;
+mod hysteria2;
 mod ss;
 mod trojan;
+mod tuic;
 mod vless;
 mod vmess;
 
+use anytls::parse_anytls_uri;
 use base64::try_decode_base64_text;
+use hysteria2::parse_hysteria2_uri;
 use ss::parse_ss_uri;
 use trojan::parse_trojan_uri;
+use tuic::parse_tuic_uri;
 use vless::parse_vless_uri;
 use vmess::parse_vmess_uri;
 
@@ -80,6 +86,9 @@ pub(crate) fn looks_like_uri_list(payload: &str) -> bool {
         || payload.contains("vmess://")
         || payload.contains("vless://")
         || payload.contains("trojan://")
+        || payload.contains("hysteria2://")
+        || payload.contains("tuic://")
+        || payload.contains("anytls://")
 }
 
 pub(crate) fn parse_proxy_uri_line(
@@ -98,6 +107,15 @@ pub(crate) fn parse_proxy_uri_line(
     }
     if line.starts_with("trojan://") {
         return parse_trojan_uri(line, source_id, updated_at);
+    }
+    if line.starts_with("hysteria2://") {
+        return parse_hysteria2_uri(line, source_id, updated_at);
+    }
+    if line.starts_with("tuic://") {
+        return parse_tuic_uri(line, source_id, updated_at);
+    }
+    if line.starts_with("anytls://") {
+        return parse_anytls_uri(line, source_id, updated_at);
     }
 
     Err(CoreError::SubscriptionParse(format!(

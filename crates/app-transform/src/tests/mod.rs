@@ -403,6 +403,26 @@ fn snapshot_tuic_share_link_base64() {
 }
 
 #[test]
+fn snapshot_anytls_share_link_base64() {
+    assert_base64_snapshot(
+        build_node(
+            "ANYTLS-HK",
+            ProxyProtocol::AnyTls,
+            ProxyTransport::Tcp,
+            Some("hk"),
+            vec![
+                ("password", Value::String("anytls-pass".to_string())),
+                ("client_fingerprint", Value::String("chrome".to_string())),
+                ("alpn", json!(["h2", "http/1.1"])),
+                ("skip_cert_verify", Value::Bool(true)),
+            ],
+        ),
+        "YW55dGxzOi8vYW55dGxzLXBhc3NAYW55dGxzLWhrLmV4YW1wbGUuY29tOjQ0Mz9zbmk9dGxzLmV4YW1wbGUuY29tJmFscG49aDIlMkNodHRwJTJGMS4xJmZwPWNocm9tZSZhbGxvd0luc2VjdXJlPTEjQU5ZVExTLUhL",
+        "anytls://anytls-pass@anytls-hk.example.com:443?sni=tls.example.com&alpn=h2%2Chttp%2F1.1&fp=chrome&allowInsecure=1#ANYTLS-HK",
+    );
+}
+
+#[test]
 fn clash_template_preserves_existing_nodes_and_appends_aggregated_set() {
     let transformer = ClashTransformer::default();
     let nodes = vec![

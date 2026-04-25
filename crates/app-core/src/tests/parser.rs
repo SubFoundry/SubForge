@@ -33,6 +33,28 @@ fn uri_list_parser_handles_invalid_protocol_lines_without_failing() {
 }
 
 #[test]
+fn uri_list_parser_supports_base64_hysteria2_tuic_anytls_lines() {
+    let parser = UriListParser;
+    let payload = "hysteria2://hy2-pass@hy2.example.com:443?sni=sni.hy2.example.com#hy2-node\n\
+tuic://cccccccc-cccc-cccc-cccc-cccccccccccc:tuic-pass@tuic.example.com:443?sni=sni.tuic.example.com#tuic-node\n\
+anytls://anytls-pass@anytls.example.com:443?sni=sni.anytls.example.com#anytls-node";
+    let encoded = BASE64_STANDARD.encode(payload);
+
+    let nodes = parser
+        .parse("source-new-schemes", &encoded)
+        .expect("解析包含新协议的 Base64 订阅应成功");
+    assert_eq!(nodes.len(), 3);
+
+    let protocols = nodes
+        .iter()
+        .map(|node| node.protocol.clone())
+        .collect::<HashSet<_>>();
+    assert!(protocols.contains(&ProxyProtocol::Hysteria2));
+    assert!(protocols.contains(&ProxyProtocol::Tuic));
+    assert!(protocols.contains(&ProxyProtocol::AnyTls));
+}
+
+#[test]
 fn uri_list_parser_decodes_percent_encoded_node_names() {
     let parser = UriListParser;
     let vmess_payload = BASE64_STANDARD.encode(
@@ -68,13 +90,16 @@ fn uri_list_parser_preserves_transport_tls_and_runtime_fields() {
     let payload = format!(
         "vmess://{vmess_payload}\n\
 vless://bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb@vless.example.com:443?type=grpc&security=tls&sni=sni.vless.example.com&serviceName=vless-grpc&alpn=h2%2Chttp%2F1.1&fp=chrome&allowInsecure=1&flow=xtls-rprx-vision#vless-node\n\
-trojan://trojan-pass@trojan.example.com:443?type=ws&sni=sni.trojan.example.com&host=edge.trojan.example.com&path=%2Ftrojan&alpn=h2%2Chttp%2F1.1&allowInsecure=true#trojan-node"
+trojan://trojan-pass@trojan.example.com:443?type=ws&sni=sni.trojan.example.com&host=edge.trojan.example.com&path=%2Ftrojan&alpn=h2%2Chttp%2F1.1&allowInsecure=true#trojan-node\n\
+hysteria2://hy2-pass@hy2.example.com:443?obfs=salamander&obfs-password=hy2-obfs&sni=sni.hy2.example.com&alpn=h3&insecure=1#hy2-node\n\
+tuic://cccccccc-cccc-cccc-cccc-cccccccccccc:tuic-pass@tuic.example.com:443?congestion_control=bbr&udp_relay_mode=native&sni=sni.tuic.example.com&alpn=h3%2Ch3-29&allow_insecure=1#tuic-node\n\
+anytls://anytls-pass@anytls.example.com:443?sni=sni.anytls.example.com&alpn=h2%2Chttp%2F1.1&fp=chrome&allowInsecure=1#anytls-node"
     );
 
     let nodes = parser
         .parse("source-runtime-fields", &payload)
         .expect("解析带完整参数的节点应成功");
-    assert_eq!(nodes.len(), 3);
+    assert_eq!(nodes.len(), 6);
 
     let vmess = nodes
         .iter()
@@ -144,5 +169,87 @@ trojan://trojan-pass@trojan.example.com:443?type=ws&sni=sni.trojan.example.com&h
     assert_eq!(
         trojan.extra.get("password"),
         Some(&Value::String("trojan-pass".to_string()))
+    );
+
+    let hysteria2 = nodes
+        .iter()
+        .find(|node| node.protocol == ProxyProtocol::Hysteria2)
+        .expect("应包含 hysteria2 节点");
+    assert_eq!(hysteria2.transport, ProxyTransport::Quic);
+    assert!(hysteria2.tls.enabled);
+    assert_eq!(
+        hysteria2.tls.server_name.as_deref(),
+        Some("sni.hy2.example.com")
+    );
+    assert_eq!(
+        hysteria2.extra.get("password"),
+        Some(&Value::String("hy2-pass".to_string()))
+    );
+    assert_eq!(
+        hysteria2.extra.get("obfs"),
+        Some(&Value::String("salamander".to_string()))
+    );
+    assert_eq!(
+        hysteria2.extra.get("obfs_password"),
+        Some(&Value::String("hy2-obfs".to_string()))
+    );
+    assert_eq!(
+        hysteria2.extra.get("skip_cert_verify"),
+        Some(&Value::Bool(true))
+    );
+
+    let tuic = nodes
+        .iter()
+        .find(|node| node.protocol == ProxyProtocol::Tuic)
+        .expect("应包含 tuic 节点");
+    assert_eq!(tuic.transport, ProxyTransport::Quic);
+    assert!(tuic.tls.enabled);
+    assert_eq!(tuic.tls.server_name.as_deref(), Some("sni.tuic.example.com"));
+    assert_eq!(
+        tuic.extra.get("uuid"),
+        Some(&Value::String(
+            "cccccccc-cccc-cccc-cccc-cccccccccccc".to_string()
+        ))
+    );
+    assert_eq!(
+        tuic.extra.get("password"),
+        Some(&Value::String("tuic-pass".to_string()))
+    );
+    assert_eq!(
+        tuic.extra.get("congestion_control"),
+        Some(&Value::String("bbr".to_string()))
+    );
+    assert_eq!(
+        tuic.extra.get("udp_relay_mode"),
+        Some(&Value::String("native".to_string()))
+    );
+    assert_eq!(tuic.extra.get("alpn"), Some(&json!(["h3", "h3-29"])));
+    assert_eq!(
+        tuic.extra.get("skip_cert_verify"),
+        Some(&Value::Bool(true))
+    );
+
+    let anytls = nodes
+        .iter()
+        .find(|node| node.protocol == ProxyProtocol::AnyTls)
+        .expect("应包含 anytls 节点");
+    assert_eq!(anytls.transport, ProxyTransport::Tcp);
+    assert!(anytls.tls.enabled);
+    assert_eq!(
+        anytls.tls.server_name.as_deref(),
+        Some("sni.anytls.example.com")
+    );
+    assert_eq!(
+        anytls.extra.get("password"),
+        Some(&Value::String("anytls-pass".to_string()))
+    );
+    assert_eq!(
+        anytls.extra.get("client_fingerprint"),
+        Some(&Value::String("chrome".to_string()))
+    );
+    assert_eq!(anytls.extra.get("alpn"), Some(&json!(["h2", "http/1.1"])));
+    assert_eq!(
+        anytls.extra.get("skip_cert_verify"),
+        Some(&Value::Bool(true))
     );
 }
