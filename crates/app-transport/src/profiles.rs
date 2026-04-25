@@ -44,18 +44,20 @@ pub trait TransportProfile: Send + Sync + std::fmt::Debug {
         false
     }
     fn build_client(&self) -> TransportResult<Client> {
-        self.build_client_with_limits(self.timeout(), self.max_redirects())
+        self.build_client_with_limits(self.timeout(), self.max_redirects(), None)
     }
     fn build_client_with_limits(
         &self,
         timeout: Duration,
         max_redirects: usize,
+        redirect_policy: Option<Policy>,
     ) -> TransportResult<Client> {
         build_client_with_settings(
             timeout,
             max_redirects,
             self.default_user_agent(),
             self.uses_cookie_store(),
+            redirect_policy,
         )
     }
     fn request_delay(&self) -> Duration;
@@ -195,9 +197,10 @@ fn build_client_with_settings(
     max_redirects: usize,
     user_agent: &'static str,
     use_cookie_store: bool,
+    redirect_policy: Option<Policy>,
 ) -> TransportResult<Client> {
     let mut builder = Client::builder()
-        .redirect(Policy::limited(max_redirects))
+        .redirect(redirect_policy.unwrap_or_else(|| Policy::limited(max_redirects)))
         .timeout(timeout)
         .user_agent(user_agent)
         .danger_accept_invalid_certs(false);
