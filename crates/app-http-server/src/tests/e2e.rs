@@ -1782,11 +1782,17 @@ async fn e2e_import_plugin_zip_with_backslash_path_separator() {
 }
 
 #[tokio::test]
-async fn e2e_refresh_source_with_unsupported_network_profile_returns_bad_request() {
+async fn e2e_refresh_source_with_browser_firefox_network_profile_succeeds() {
     let state = build_test_state();
     let app = build_router(state.clone());
 
-    let boundary = "----subforge-e2e-unsupported-profile-boundary";
+    let (upstream_base, server_task) = start_fixture_server(
+        BASE64_SUBSCRIPTION_FIXTURE.trim().to_string(),
+        "text/plain; charset=utf-8",
+    )
+    .await;
+
+    let boundary = "----subforge-e2e-browser-firefox-profile-boundary";
     let plugin_zip = build_builtin_plugin_zip_bytes_with_network_profile("browser_firefox");
     let import_body = build_multipart_plugin_body(boundary, &plugin_zip, "builtin-static.zip");
     let import_response = app
@@ -1815,9 +1821,9 @@ async fn e2e_refresh_source_with_unsupported_network_profile_returns_bad_request
             "/api/sources",
             &json!({
                 "plugin_id": "test.plugin.import-stub",
-                "name": "Unsupported Profile Source",
+                "name": "Browser Firefox Profile Source",
                 "config": {
-                    "url": "https://example.com/subscription"
+                    "url": format!("{upstream_base}/sub")
                 }
             }),
         ))
@@ -1840,17 +1846,15 @@ async fn e2e_refresh_source_with_unsupported_network_profile_returns_bad_request
         ))
         .await
         .expect("刷新来源请求执行失败");
-    assert_eq!(refresh_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(refresh_response.status(), StatusCode::OK);
     let refresh_payload = read_json(refresh_response).await;
     assert_eq!(
-        refresh_payload.get("code").and_then(Value::as_str),
-        Some("E_CONFIG_INVALID")
+        refresh_payload.get("source_id").and_then(Value::as_str),
+        Some(source_id.as_str())
     );
-    assert!(
-        refresh_payload
-            .get("message")
-            .and_then(Value::as_str)
-            .is_some_and(|message| message.contains("network_profile"))
+    assert_eq!(
+        refresh_payload.get("node_count").and_then(Value::as_u64),
+        Some(3)
     );
 
     let refresh_repository = RefreshJobRepository::new(state.database.as_ref());
@@ -1858,11 +1862,10 @@ async fn e2e_refresh_source_with_unsupported_network_profile_returns_bad_request
         .list_by_source(&source_id)
         .expect("读取 refresh_jobs 失败");
     assert_eq!(refresh_jobs.len(), 1);
-    assert_eq!(refresh_jobs[0].status, "failed");
-    assert_eq!(
-        refresh_jobs[0].error_code.as_deref(),
-        Some("E_CONFIG_INVALID")
-    );
+    assert_eq!(refresh_jobs[0].status, "success");
+    assert_eq!(refresh_jobs[0].node_count, Some(3));
+
+    server_task.abort();
 }
 
 #[tokio::test]

@@ -7,5 +7,6 @@ mod tests;
 
 pub use error::{TransportError, TransportResult};
 pub use profiles::{
-    BrowserChromeProfile, NetworkProfileFactory, StandardProfile, TransportProfile,
+    BrowserChromeProfile, BrowserFirefoxProfile, NetworkProfileFactory, StandardProfile,
+    TransportProfile, WebviewAssistedProfile,
 };

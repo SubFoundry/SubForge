@@ -13,7 +13,8 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 use crate::{
-    BrowserChromeProfile, NetworkProfileFactory, StandardProfile, TransportError, TransportProfile,
+    BrowserChromeProfile, BrowserFirefoxProfile, NetworkProfileFactory, StandardProfile,
+    TransportError, TransportProfile, WebviewAssistedProfile,
 };
 
 #[test]
@@ -146,6 +147,40 @@ fn factory_resolves_browser_chrome_profile() {
         NetworkProfileFactory::create("browser_chrome").expect("browser_chrome 档位应可创建");
     assert_eq!(profile.request_delay(), Duration::from_millis(500));
     assert_eq!(profile.max_retries(), 3);
+}
+
+#[test]
+fn browser_firefox_profile_uses_cookie_store_and_retry_policy() {
+    let profile = BrowserFirefoxProfile::default();
+    assert!(profile.uses_cookie_store());
+    assert_eq!(profile.request_delay(), Duration::from_millis(500));
+    assert_eq!(profile.max_retries(), 3);
+    assert!(profile.is_retryable_status(StatusCode::TOO_MANY_REQUESTS));
+    assert!(profile.is_retryable_status(StatusCode::SERVICE_UNAVAILABLE));
+}
+
+#[test]
+fn webview_assisted_profile_uses_cookie_store() {
+    let profile = WebviewAssistedProfile::default();
+    assert!(profile.uses_cookie_store());
+    assert_eq!(profile.request_delay(), Duration::from_millis(0));
+    assert_eq!(profile.max_retries(), 0);
+}
+
+#[test]
+fn factory_resolves_browser_firefox_profile() {
+    let profile =
+        NetworkProfileFactory::create("browser_firefox").expect("browser_firefox 档位应可创建");
+    assert_eq!(profile.request_delay(), Duration::from_millis(500));
+    assert_eq!(profile.max_retries(), 3);
+}
+
+#[test]
+fn factory_resolves_webview_assisted_profile() {
+    let profile =
+        NetworkProfileFactory::create("webview_assisted").expect("webview_assisted 档位应可创建");
+    assert_eq!(profile.request_delay(), Duration::from_millis(0));
+    assert_eq!(profile.max_retries(), 0);
 }
 
 #[test]

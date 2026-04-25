@@ -74,55 +74,56 @@ async fn engine_refresh_source_uses_profile_headers_from_plugin_manifest() {
 }
 
 #[tokio::test]
-async fn engine_refresh_source_marks_failed_when_network_profile_is_unsupported() {
+async fn engine_refresh_source_supports_browser_firefox_network_profile() {
     let db = Database::open_in_memory().expect("内存数据库初始化失败");
-    let temp_root = create_temp_dir("engine-unsupported-profile");
+    let temp_root = create_temp_dir("engine-browser-firefox-profile");
     let plugins_dir = temp_root.join("plugins");
     let install_service = PluginInstallService::new(&db, &plugins_dir);
-    let unsupported_plugin_dir = create_static_plugin_with_network_profile(
+    let firefox_plugin_dir = create_static_plugin_with_network_profile(
         &temp_root,
-        "unsupported-profile-plugin",
-        "vendor.example.profile-unsupported",
+        "browser-firefox-plugin",
+        "vendor.example.profile-browser-firefox",
         "browser_firefox",
     );
     install_service
-        .install_from_dir(&unsupported_plugin_dir)
-        .expect("安装 unsupported profile 插件应成功");
+        .install_from_dir(&firefox_plugin_dir)
+        .expect("安装 browser_firefox 插件应成功");
+
+    let (url, server_task) = start_fixture_server(
+        "/sub",
+        BASE64_SUBSCRIPTION_FIXTURE.trim().to_string(),
+        "text/plain; charset=utf-8",
+    )
+    .await;
 
     let secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
     let source_service = SourceService::new(&db, &plugins_dir, secret_store.as_ref());
     let mut config = BTreeMap::new();
-    config.insert("url".to_string(), json!("https://example.com/subscription"));
+    config.insert("url".to_string(), json!(format!("{url}/sub")));
     let source = source_service
         .create_source(
-            "vendor.example.profile-unsupported",
-            "Unsupported Profile Source",
+            "vendor.example.profile-browser-firefox",
+            "Browser Firefox Source",
             config,
         )
         .expect("创建来源应成功");
 
     let engine = Engine::new(&db, &plugins_dir, Arc::clone(&secret_store));
-    let error = engine
+    let result = engine
         .refresh_source(&source.source.id, "manual")
         .await
-        .expect_err("unsupported profile 刷新应失败");
-    assert!(matches!(error, CoreError::Transport(_)));
-    assert_eq!(error.code(), "E_CONFIG_INVALID");
+        .expect("browser_firefox profile 刷新应成功");
+    assert_eq!(result.node_count, 3);
 
     let refresh_repository = RefreshJobRepository::new(&db);
     let jobs = refresh_repository
         .list_by_source(&source.source.id)
         .expect("读取 refresh_jobs 失败");
     assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].status, "failed");
-    assert_eq!(jobs[0].error_code.as_deref(), Some("E_CONFIG_INVALID"));
-    assert!(
-        jobs[0]
-            .error_message
-            .as_deref()
-            .is_some_and(|message| message.contains("不支持的 network_profile"))
-    );
+    assert_eq!(jobs[0].status, "success");
+    assert_eq!(jobs[0].node_count, Some(3));
 
+    server_task.abort();
     cleanup_dir(&temp_root);
 }
 

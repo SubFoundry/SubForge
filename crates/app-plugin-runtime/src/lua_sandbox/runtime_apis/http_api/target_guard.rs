@@ -1,8 +1,8 @@
 use std::net::{IpAddr, ToSocketAddrs};
 
 use mlua::Error as LuaError;
-use reqwest::redirect::Policy;
 use reqwest::Url;
+use reqwest::redirect::Policy;
 
 pub(super) fn redirect_policy(max_redirects: usize) -> Policy {
     let default_policy = Policy::limited(max_redirects);
@@ -105,8 +105,7 @@ mod tests {
 
     #[test]
     fn blocks_forbidden_redirect_hop_target() {
-        let redirect_target =
-            Url::parse("http://127.0.0.1:18118/health").expect("url 解析应成功");
+        let redirect_target = Url::parse("http://127.0.0.1:18118/health").expect("url 解析应成功");
         let previous = vec![Url::parse("https://example.com/start").expect("url 解析应成功")];
 
         let error = ensure_allowed_redirect_chain(&redirect_target, &previous)

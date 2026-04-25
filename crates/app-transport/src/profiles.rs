@@ -14,6 +14,15 @@ const BROWSER_CHROME_MAX_REDIRECTS: usize = 10;
 const BROWSER_CHROME_REQUEST_DELAY_MS: u64 = 500;
 const BROWSER_CHROME_MAX_RETRIES: usize = 3;
 const BROWSER_CHROME_DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const BROWSER_FIREFOX_TIMEOUT_SEC: u64 = 30;
+const BROWSER_FIREFOX_MAX_REDIRECTS: usize = 10;
+const BROWSER_FIREFOX_REQUEST_DELAY_MS: u64 = 500;
+const BROWSER_FIREFOX_MAX_RETRIES: usize = 3;
+const BROWSER_FIREFOX_DEFAULT_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0";
+const WEBVIEW_ASSISTED_TIMEOUT_SEC: u64 = 30;
+const WEBVIEW_ASSISTED_MAX_REDIRECTS: usize = 10;
+const WEBVIEW_ASSISTED_DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) SubForgeWebView/1.0 Safari/537.36";
 const EMPTY_HEADER_TEMPLATE: [(&str, &str); 0] = [];
 const BROWSER_CHROME_HEADER_TEMPLATE: [(&str, &str); 11] = [
     (
@@ -33,6 +42,20 @@ const BROWSER_CHROME_HEADER_TEMPLATE: [(&str, &str); 11] = [
     ("sec-fetch-dest", "document"),
     ("accept-encoding", "gzip, deflate, br"),
     ("accept-language", "zh-CN,zh;q=0.9,en;q=0.8"),
+];
+const BROWSER_FIREFOX_HEADER_TEMPLATE: [(&str, &str); 9] = [
+    (
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    ),
+    ("accept-language", "zh-CN,zh;q=0.9,en;q=0.8"),
+    ("accept-encoding", "gzip, deflate, br"),
+    ("upgrade-insecure-requests", "1"),
+    ("sec-fetch-dest", "document"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-user", "?1"),
+    ("te", "trailers"),
 ];
 
 pub trait TransportProfile: Send + Sync + std::fmt::Debug {
@@ -176,6 +199,113 @@ impl TransportProfile for BrowserChromeProfile {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct BrowserFirefoxProfile {
+    timeout: Duration,
+    max_redirects: usize,
+    request_delay: Duration,
+    max_retries: usize,
+    default_user_agent: &'static str,
+}
+
+impl Default for BrowserFirefoxProfile {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(BROWSER_FIREFOX_TIMEOUT_SEC),
+            max_redirects: BROWSER_FIREFOX_MAX_REDIRECTS,
+            request_delay: Duration::from_millis(BROWSER_FIREFOX_REQUEST_DELAY_MS),
+            max_retries: BROWSER_FIREFOX_MAX_RETRIES,
+            default_user_agent: BROWSER_FIREFOX_DEFAULT_USER_AGENT,
+        }
+    }
+}
+
+impl TransportProfile for BrowserFirefoxProfile {
+    fn profile_name(&self) -> &'static str {
+        "browser_firefox"
+    }
+
+    fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    fn max_redirects(&self) -> usize {
+        self.max_redirects
+    }
+
+    fn default_user_agent(&self) -> &'static str {
+        self.default_user_agent
+    }
+
+    fn uses_cookie_store(&self) -> bool {
+        true
+    }
+
+    fn request_delay(&self) -> Duration {
+        self.request_delay
+    }
+
+    fn default_headers(&self) -> &[(&'static str, &'static str)] {
+        &BROWSER_FIREFOX_HEADER_TEMPLATE
+    }
+
+    fn max_retries(&self) -> usize {
+        self.max_retries
+    }
+
+    fn is_retryable_status(&self, status_code: StatusCode) -> bool {
+        matches!(
+            status_code,
+            StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WebviewAssistedProfile {
+    timeout: Duration,
+    max_redirects: usize,
+    request_delay: Duration,
+    default_user_agent: &'static str,
+}
+
+impl Default for WebviewAssistedProfile {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(WEBVIEW_ASSISTED_TIMEOUT_SEC),
+            max_redirects: WEBVIEW_ASSISTED_MAX_REDIRECTS,
+            request_delay: Duration::from_millis(0),
+            default_user_agent: WEBVIEW_ASSISTED_DEFAULT_USER_AGENT,
+        }
+    }
+}
+
+impl TransportProfile for WebviewAssistedProfile {
+    fn profile_name(&self) -> &'static str {
+        "webview_assisted"
+    }
+
+    fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    fn max_redirects(&self) -> usize {
+        self.max_redirects
+    }
+
+    fn default_user_agent(&self) -> &'static str {
+        self.default_user_agent
+    }
+
+    fn uses_cookie_store(&self) -> bool {
+        true
+    }
+
+    fn request_delay(&self) -> Duration {
+        self.request_delay
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NetworkProfileFactory;
 
@@ -185,6 +315,8 @@ impl NetworkProfileFactory {
         match profile {
             "" | "standard" => Ok(Box::new(StandardProfile::default())),
             "browser_chrome" => Ok(Box::new(BrowserChromeProfile::default())),
+            "browser_firefox" => Ok(Box::new(BrowserFirefoxProfile::default())),
+            "webview_assisted" => Ok(Box::new(WebviewAssistedProfile::default())),
             _ => Err(crate::TransportError::UnsupportedProfile(
                 profile.to_string(),
             )),
