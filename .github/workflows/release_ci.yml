@@ -347,7 +347,30 @@ jobs:
         run: pnpm -C apps/desktop tauri build --ci --bundles nsis --target ${{ matrix.target }}
       - name: Build desktop bundle (macOS DMG)
         if: runner.os == 'macOS'
-        run: pnpm -C apps/desktop tauri build --ci --bundles dmg --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/Applications/Xcode.app/Contents/Developer/Tools:$PATH"
+          for attempt in 1 2 3; do
+            if pnpm -C apps/desktop tauri build --ci --bundles dmg --target ${{ matrix.target }}; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "dmg bundle failed after ${attempt} attempts"
+              DMG_DIR="target/${{ matrix.target }}/release/bundle/dmg"
+              if [ -f "$DMG_DIR/bundle_dmg.sh" ]; then
+                echo "=== bundle_dmg.sh ==="
+                cat "$DMG_DIR/bundle_dmg.sh"
+              fi
+              if [ -d "$DMG_DIR" ]; then
+                echo "=== dmg dir listing ==="
+                ls -la "$DMG_DIR"
+              fi
+              exit 1
+            fi
+            echo "dmg bundle failed on attempt ${attempt}, retrying..."
+            sleep $((attempt * 10))
+          done
       - name: Build desktop bundle (Linux DEB/AppImage)
         if: runner.os == 'Linux'
         run: pnpm -C apps/desktop tauri build --ci --bundles deb,appimage --target ${{ matrix.target }}
