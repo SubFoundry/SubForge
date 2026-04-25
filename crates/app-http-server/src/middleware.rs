@@ -1,13 +1,10 @@
+use std::net::SocketAddr;
 use std::time::Duration;
-use std::{net::SocketAddr, str::FromStr};
 
 use axum::body::Body;
 use axum::extract::State;
 use axum::extract::connect_info::ConnectInfo;
-use axum::http::{
-    Method, Request, StatusCode, header::AUTHORIZATION, header::FORWARDED, header::HOST,
-    header::USER_AGENT,
-};
+use axum::http::{Method, Request, StatusCode, header::AUTHORIZATION, header::HOST};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -165,67 +162,9 @@ pub(crate) async fn admin_auth_middleware(
 }
 
 fn request_source_key(request: &Request<Body>) -> String {
-    if let Some(client_id) = header_value(request, "x-subforge-client-id") {
-        return format!("client:{}", normalize_source_value(client_id));
-    }
-    if let Some(ip) =
-        header_value(request, "x-forwarded-for").and_then(|value| value.split(',').next())
-    {
-        return format!("xff:{}", normalize_source_value(ip));
-    }
-    if let Some(ip) = header_value(request, "x-real-ip") {
-        return format!("xri:{}", normalize_source_value(ip));
-    }
-    if let Some(forwarded) = request
-        .headers()
-        .get(FORWARDED)
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse_forwarded_for)
-    {
-        return format!("fwd:{}", normalize_source_value(&forwarded));
-    }
-    if let Some(ConnectInfo(peer)) = request.extensions().get::<ConnectInfo<SocketAddr>>() {
-        return format!("peer:{peer}");
-    }
-    if let Some(agent) = request
-        .headers()
-        .get(USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-    {
-        return format!("ua:{}", normalize_source_value(agent));
-    }
-    "unknown".to_string()
-}
-
-fn header_value<'a>(request: &'a Request<Body>, header_name: &str) -> Option<&'a str> {
     request
-        .headers()
-        .get(header_name)
-        .and_then(|value| value.to_str().ok())
-}
-
-fn parse_forwarded_for(raw: &str) -> Option<String> {
-    raw.split(',').find_map(|entry| {
-        entry.split(';').find_map(|segment| {
-            let trimmed = segment.trim();
-            let value = trimmed.strip_prefix("for=")?;
-            let value = value.trim_matches('"').trim();
-            if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            }
-        })
-    })
-}
-
-fn normalize_source_value(raw: &str) -> String {
-    let value = raw.trim();
-    if value.is_empty() {
-        return "unknown".to_string();
-    }
-    if let Ok(address) = SocketAddr::from_str(value) {
-        return address.ip().to_string();
-    }
-    value.chars().take(128).collect()
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(peer)| format!("peer:{}", peer.ip()))
+        .unwrap_or_else(|| "peer:unknown".to_string())
 }

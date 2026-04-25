@@ -1,10 +1,32 @@
 use axum::body::{Body, to_bytes};
+use axum::extract::connect_info::ConnectInfo;
 use axum::http::{Request, StatusCode, header::HOST};
 use std::io::Write as _;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tower::ServiceExt;
 use zip::write::SimpleFileOptions;
 
 use super::*;
+
+fn request_with_peer(
+    uri: &str,
+    authorization: &str,
+    peer_ip: Ipv4Addr,
+    extra_headers: &[(&str, &str)],
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .uri(uri)
+        .header(HOST, "127.0.0.1:18118")
+        .header("authorization", authorization);
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, *value);
+    }
+    let mut request = builder.body(Body::empty()).expect("创建请求失败");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::new(IpAddr::V4(peer_ip), 40000)));
+    request
+}
 
 #[tokio::test]
 async fn plugins_api_requires_admin_token() {
@@ -344,15 +366,12 @@ async fn auth_failure_cooldown_isolated_by_request_source() {
     for _ in 0..5 {
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/plugins")
-                    .header(HOST, "127.0.0.1:18118")
-                    .header("x-forwarded-for", "198.51.100.10")
-                    .header("authorization", "Bearer wrong-token")
-                    .body(Body::empty())
-                    .expect("创建请求失败"),
-            )
+            .oneshot(request_with_peer(
+                "/api/plugins",
+                "Bearer wrong-token",
+                Ipv4Addr::new(198, 51, 100, 10),
+                &[],
+            ))
             .await
             .expect("请求执行失败");
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -362,29 +381,23 @@ async fn auth_failure_cooldown_isolated_by_request_source() {
 
     let blocked_source = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/plugins")
-                .header(HOST, "127.0.0.1:18118")
-                .header("x-forwarded-for", "198.51.100.10")
-                .header("authorization", "Bearer wrong-token")
-                .body(Body::empty())
-                .expect("创建请求失败"),
-        )
+        .oneshot(request_with_peer(
+            "/api/plugins",
+            "Bearer wrong-token",
+            Ipv4Addr::new(198, 51, 100, 10),
+            &[],
+        ))
         .await
         .expect("请求执行失败");
     assert_eq!(blocked_source.status(), StatusCode::TOO_MANY_REQUESTS);
 
     let independent_source = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/plugins")
-                .header(HOST, "127.0.0.1:18118")
-                .header("x-forwarded-for", "198.51.100.11")
-                .header("authorization", "Bearer wrong-token")
-                .body(Body::empty())
-                .expect("创建请求失败"),
-        )
+        .oneshot(request_with_peer(
+            "/api/plugins",
+            "Bearer wrong-token",
+            Ipv4Addr::new(198, 51, 100, 11),
+            &[],
+        ))
         .await
         .expect("请求执行失败");
     assert_eq!(independent_source.status(), StatusCode::UNAUTHORIZED);
@@ -398,15 +411,12 @@ async fn management_rate_limit_isolated_by_request_source() {
     for _ in 0..MANAGEMENT_RATE_LIMIT_PER_SECOND {
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/plugins")
-                    .header(HOST, "127.0.0.1:18118")
-                    .header("x-forwarded-for", "203.0.113.20")
-                    .header("authorization", "Bearer test-admin-token")
-                    .body(Body::empty())
-                    .expect("创建请求失败"),
-            )
+            .oneshot(request_with_peer(
+                "/api/plugins",
+                "Bearer test-admin-token",
+                Ipv4Addr::new(203, 0, 113, 20),
+                &[],
+            ))
             .await
             .expect("请求执行失败");
         assert_eq!(response.status(), StatusCode::OK);
@@ -414,32 +424,99 @@ async fn management_rate_limit_isolated_by_request_source() {
 
     let throttled = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/plugins")
-                .header(HOST, "127.0.0.1:18118")
-                .header("x-forwarded-for", "203.0.113.20")
-                .header("authorization", "Bearer test-admin-token")
-                .body(Body::empty())
-                .expect("创建请求失败"),
-        )
+        .oneshot(request_with_peer(
+            "/api/plugins",
+            "Bearer test-admin-token",
+            Ipv4Addr::new(203, 0, 113, 20),
+            &[],
+        ))
         .await
         .expect("请求执行失败");
     assert_eq!(throttled.status(), StatusCode::TOO_MANY_REQUESTS);
 
     let independent = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/plugins")
-                .header(HOST, "127.0.0.1:18118")
-                .header("x-forwarded-for", "203.0.113.21")
-                .header("authorization", "Bearer test-admin-token")
-                .body(Body::empty())
-                .expect("创建请求失败"),
-        )
+        .oneshot(request_with_peer(
+            "/api/plugins",
+            "Bearer test-admin-token",
+            Ipv4Addr::new(203, 0, 113, 21),
+            &[],
+        ))
         .await
         .expect("请求执行失败");
     assert_eq!(independent.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn auth_failure_cooldown_cannot_be_bypassed_by_spoofed_forward_headers() {
+    let app = build_router(build_test_state());
+
+    for _ in 0..5 {
+        let response = app
+            .clone()
+            .oneshot(request_with_peer(
+                "/api/plugins",
+                "Bearer wrong-token",
+                Ipv4Addr::new(198, 51, 100, 10),
+                &[("x-forwarded-for", "198.51.100.10")],
+            ))
+            .await
+            .expect("请求执行失败");
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            break;
+        }
+    }
+
+    let spoofed = app
+        .oneshot(request_with_peer(
+            "/api/plugins",
+            "Bearer wrong-token",
+            Ipv4Addr::new(198, 51, 100, 10),
+            &[
+                ("x-forwarded-for", "198.51.100.11"),
+                ("x-real-ip", "198.51.100.12"),
+                ("forwarded", "for=198.51.100.13"),
+                ("x-subforge-client-id", "other-client"),
+            ],
+        ))
+        .await
+        .expect("请求执行失败");
+    assert_eq!(spoofed.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn management_rate_limit_cannot_be_bypassed_by_spoofed_forward_headers() {
+    use crate::state::MANAGEMENT_RATE_LIMIT_PER_SECOND;
+
+    let app = build_router(build_test_state());
+    for _ in 0..MANAGEMENT_RATE_LIMIT_PER_SECOND {
+        let response = app
+            .clone()
+            .oneshot(request_with_peer(
+                "/api/plugins",
+                "Bearer test-admin-token",
+                Ipv4Addr::new(203, 0, 113, 20),
+                &[("x-forwarded-for", "203.0.113.20")],
+            ))
+            .await
+            .expect("请求执行失败");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let spoofed = app
+        .oneshot(request_with_peer(
+            "/api/plugins",
+            "Bearer test-admin-token",
+            Ipv4Addr::new(203, 0, 113, 20),
+            &[
+                ("x-forwarded-for", "203.0.113.21"),
+                ("x-real-ip", "203.0.113.22"),
+                ("forwarded", "for=203.0.113.23"),
+                ("x-subforge-client-id", "burst-bypass"),
+            ],
+        ))
+        .await
+        .expect("请求执行失败");
+    assert_eq!(spoofed.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
