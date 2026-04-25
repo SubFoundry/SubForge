@@ -95,6 +95,7 @@ impl<'a> ScriptExecutor<'a> {
             let sandbox_config = LuaSandboxConfig::default()
                 .with_network_profile(loaded_plugin.manifest.network_profile.clone())
                 .with_plugin_id(loaded_plugin.manifest.plugin_id.clone())
+                .with_capabilities(loaded_plugin.manifest.capabilities.iter().cloned())
                 .with_secret_store(Arc::clone(&self.secret_store))
                 .with_log_sink(log_collector.clone());
             let sandbox = LuaSandbox::new_with_config(sandbox_config)?;

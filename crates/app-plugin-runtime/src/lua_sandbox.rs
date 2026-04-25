@@ -28,6 +28,9 @@ const DEFAULT_HOOK_STEP: u32 = 1000;
 const DEFAULT_MAX_INSTRUCTIONS: u64 = 100_000_000;
 const DEFAULT_NETWORK_PROFILE: &str = "standard";
 const DEFAULT_PLUGIN_ID: &str = "runtime.default";
+const SUPPORTED_RUNTIME_CAPABILITIES: &[&str] = &[
+    "http", "cookie", "json", "html", "base64", "secret", "log", "time",
+];
 const SCRIPT_HTTP_TIMEOUT_MS: u64 = 15_000;
 const SCRIPT_HTTP_MAX_REQUESTS: usize = 20;
 const SCRIPT_HTTP_MAX_REDIRECTS: usize = 5;
@@ -80,6 +83,7 @@ pub struct LuaSandboxConfig {
     pub instruction_hook_step: u32,
     pub network_profile: String,
     pub plugin_id: String,
+    pub capabilities: Vec<String>,
     pub secret_store: Arc<dyn SecretStore>,
     pub log_sink: Option<Arc<dyn RuntimeLogSink>>,
 }
@@ -93,6 +97,7 @@ impl std::fmt::Debug for LuaSandboxConfig {
             .field("instruction_hook_step", &self.instruction_hook_step)
             .field("network_profile", &self.network_profile)
             .field("plugin_id", &self.plugin_id)
+            .field("capabilities", &self.capabilities)
             .field("secret_store", &"<secret-store>")
             .field(
                 "log_sink",
@@ -111,6 +116,10 @@ impl Default for LuaSandboxConfig {
             instruction_hook_step: DEFAULT_HOOK_STEP,
             network_profile: DEFAULT_NETWORK_PROFILE.to_string(),
             plugin_id: DEFAULT_PLUGIN_ID.to_string(),
+            capabilities: SUPPORTED_RUNTIME_CAPABILITIES
+                .iter()
+                .map(|capability| (*capability).to_string())
+                .collect(),
             secret_store: Arc::new(MemorySecretStore::new()),
             log_sink: None,
         }
@@ -148,6 +157,15 @@ impl LuaSandboxConfig {
         self
     }
 
+    pub fn with_capabilities<I, S>(mut self, capabilities: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.capabilities = capabilities.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub fn with_secret_store(mut self, secret_store: Arc<dyn SecretStore>) -> Self {
         self.secret_store = secret_store;
         self
@@ -175,6 +193,16 @@ impl LuaSandbox {
             return Err(PluginRuntimeError::ScriptRuntime(
                 "plugin_id 不能为空".to_string(),
             ));
+        }
+
+        let unsupported_capability = config
+            .capabilities
+            .iter()
+            .find(|capability| !SUPPORTED_RUNTIME_CAPABILITIES.contains(&capability.as_str()));
+        if let Some(capability) = unsupported_capability {
+            return Err(PluginRuntimeError::ScriptRuntime(format!(
+                "不支持的 runtime capability：{capability}"
+            )));
         }
 
         let secret_scope = format!("plugin:{}", config.plugin_id);

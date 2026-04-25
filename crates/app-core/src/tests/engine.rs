@@ -328,6 +328,100 @@ async fn engine_refresh_source_executes_script_pipeline_and_persists_state() {
 }
 
 #[tokio::test]
+async fn engine_refresh_source_denies_unlisted_manifest_capability_api() {
+    let db = Database::open_in_memory().expect("内存数据库初始化失败");
+    let temp_root = create_temp_dir("engine-script-capability-deny");
+    let plugins_dir = temp_root.join("plugins");
+    let plugin_dir = temp_root.join("script-capability-deny-plugin");
+    let scripts_dir = plugin_dir.join("scripts");
+    fs::create_dir_all(&scripts_dir).expect("创建脚本插件目录失败");
+    fs::write(
+        plugin_dir.join("plugin.json"),
+        r#"{
+            "plugin_id": "vendor.example.script-capability-deny",
+            "spec_version": "1.0",
+            "name": "Script Capability Deny",
+            "version": "1.0.0",
+            "type": "script",
+            "config_schema": "schema.json",
+            "secret_fields": [],
+            "entrypoints": {
+                "fetch": "scripts/fetch.lua"
+            },
+            "capabilities": ["json"],
+            "network_profile": "standard"
+        }"#,
+    )
+    .expect("写入 plugin.json 失败");
+    fs::write(
+        plugin_dir.join("schema.json"),
+        r#"{
+            "type": "object",
+            "required": ["seed"],
+            "properties": {
+                "seed": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        }"#,
+    )
+    .expect("写入 schema.json 失败");
+    fs::write(
+        scripts_dir.join("fetch.lua"),
+        r#"
+            function fetch(ctx, config, state)
+                local encoded = base64.encode(config.seed)
+                return {
+                    ok = true,
+                    subscription = {
+                        content = encoded
+                    }
+                }
+            end
+        "#,
+    )
+    .expect("写入 fetch.lua 失败");
+
+    let install_service = PluginInstallService::new(&db, &plugins_dir);
+    install_service
+        .install_from_dir(&plugin_dir)
+        .expect("安装脚本插件应成功");
+
+    let secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
+    let source_service = SourceService::new(&db, &plugins_dir, secret_store.as_ref());
+    let mut config = BTreeMap::new();
+    config.insert("seed".to_string(), json!("alpha"));
+    let source = source_service
+        .create_source(
+            "vendor.example.script-capability-deny",
+            "Script Capability Deny Source",
+            config,
+        )
+        .expect("创建脚本来源应成功");
+
+    let engine = Engine::new(&db, &plugins_dir, Arc::clone(&secret_store));
+    let error = engine
+        .refresh_source(&source.source.id, "manual")
+        .await
+        .expect_err("未声明 base64 capability 时刷新应失败");
+
+    assert_eq!(error.code(), "E_SCRIPT_RUNTIME");
+    assert!(matches!(
+        error,
+        CoreError::PluginRuntime(app_plugin_runtime::PluginRuntimeError::ScriptRuntime(_))
+    ));
+
+    let refresh_repository = RefreshJobRepository::new(&db);
+    let jobs = refresh_repository
+        .list_by_source(&source.source.id)
+        .expect("读取 refresh_jobs 失败");
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].status, "failed");
+    assert_eq!(jobs[0].error_code.as_deref(), Some("E_SCRIPT_RUNTIME"));
+
+    cleanup_dir(&temp_root);
+}
+
+#[tokio::test]
 async fn engine_refresh_source_uses_standard_headers_for_script_subscription_url() {
     let db = Database::open_in_memory().expect("内存数据库初始化失败");
     let temp_root = create_temp_dir("engine-script-subscription-url-headers");

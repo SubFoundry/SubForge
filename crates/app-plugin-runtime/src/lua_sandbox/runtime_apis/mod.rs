@@ -59,14 +59,37 @@ pub(super) fn register_runtime_apis(
     request_counter: Arc<AtomicUsize>,
     log_sink: Option<Arc<dyn RuntimeLogSink>>,
 ) -> PluginRuntimeResult<()> {
-    json_api::register_json_api(lua)?;
-    base64_api::register_base64_api(lua)?;
-    time_api::register_time_api(lua)?;
-    log_api::register_log_api(lua, log_sink)?;
-    html_api::register_html_api(lua)?;
-    cookie_api::register_cookie_api(lua, Arc::clone(&cookie_store))?;
-    secret_api::register_secret_api(lua, Arc::clone(&config.secret_store), secret_scope)?;
-    http_api::register_http_api(lua, &config.network_profile, cookie_store, request_counter)?;
+    let has_capability = |capability: &str| {
+        config
+            .capabilities
+            .iter()
+            .any(|enabled| enabled.as_str() == capability)
+    };
+
+    if has_capability("json") {
+        json_api::register_json_api(lua)?;
+    }
+    if has_capability("base64") {
+        base64_api::register_base64_api(lua)?;
+    }
+    if has_capability("time") {
+        time_api::register_time_api(lua)?;
+    }
+    if has_capability("log") {
+        log_api::register_log_api(lua, log_sink)?;
+    }
+    if has_capability("html") {
+        html_api::register_html_api(lua)?;
+    }
+    if has_capability("cookie") {
+        cookie_api::register_cookie_api(lua, Arc::clone(&cookie_store))?;
+    }
+    if has_capability("secret") {
+        secret_api::register_secret_api(lua, Arc::clone(&config.secret_store), secret_scope)?;
+    }
+    if has_capability("http") {
+        http_api::register_http_api(lua, &config.network_profile, cookie_store, request_counter)?;
+    }
     Ok(())
 }
 

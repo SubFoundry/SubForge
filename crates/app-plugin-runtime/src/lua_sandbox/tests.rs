@@ -176,6 +176,62 @@ fn exposes_json_base64_time_and_log_apis() {
 }
 
 #[test]
+fn denies_unlisted_runtime_capability_apis() {
+    let script_path = write_temp_script(
+        "runtime-capability-deny",
+        r#"
+            function run()
+                return {
+                    has_json = pcall(function() return json.parse("{}") end),
+                    has_http = pcall(function() return http.request({ url = "http://127.0.0.1:18118/health" }) end),
+                    has_secret = pcall(function() return secret.get("password") end),
+                    has_log = pcall(function() return log.info("test") end),
+                    has_time = pcall(function() return time.now() end)
+                }
+            end
+        "#,
+    );
+    let config = LuaSandboxConfig::default().with_capabilities(["base64"]);
+    let sandbox = LuaSandbox::new_with_config(config).expect("沙箱初始化应成功");
+    let result = sandbox
+        .exec_file(&script_path, "run", &[])
+        .expect("脚本应可执行并返回能力检测结果");
+
+    assert_eq!(result["has_json"], json!(false));
+    assert_eq!(result["has_http"], json!(false));
+    assert_eq!(result["has_secret"], json!(false));
+    assert_eq!(result["has_log"], json!(false));
+    assert_eq!(result["has_time"], json!(false));
+    cleanup_script(&script_path);
+}
+
+#[test]
+fn allows_declared_runtime_capability_apis() {
+    let script_path = write_temp_script(
+        "runtime-capability-allow",
+        r#"
+            function run()
+                local encoded = base64.encode("ok")
+                local decoded = base64.decode(encoded)
+                return {
+                    encoded = encoded,
+                    decoded = decoded
+                }
+            end
+        "#,
+    );
+    let config = LuaSandboxConfig::default().with_capabilities(["base64"]);
+    let sandbox = LuaSandbox::new_with_config(config).expect("沙箱初始化应成功");
+    let result = sandbox
+        .exec_file(&script_path, "run", &[])
+        .expect("声明过的 capability API 应可调用");
+
+    assert_eq!(result["encoded"], json!("b2s="));
+    assert_eq!(result["decoded"], json!("ok"));
+    cleanup_script(&script_path);
+}
+
+#[test]
 fn exposes_html_and_cookie_apis() {
     let script_path = write_temp_script(
         "html-cookie-apis",
